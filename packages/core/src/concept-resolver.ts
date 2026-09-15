@@ -1,0 +1,203 @@
+import type { Concept, ConceptId, ConceptRegistry } from "./concepts";
+import { MAX_CONCEPT_DEPTH } from "./concepts";
+
+/**
+ * Lowercases, strips diacritics and punctuation, and collapses whitespace to
+ * single hyphens, so that "Listas Encadeadas" and "listas-encadeadas"
+ * produce the same lookup key.
+ */
+export function normalizeTerm(term: string): string {
+  return term
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+/** Follows merge pointers to the surviving concept */
+export function canonical(
+  registry: ConceptRegistry,
+  id: ConceptId,
+): Concept | null {
+  const seen = new Set<string>();
+  let current = registry.concepts.find((c) => c.id === id) ?? null;
+  while (current?.mergedInto && !seen.has(current.id)) {
+    seen.add(current.id);
+    const next: string = current.mergedInto;
+    current = registry.concepts.find((c) => c.id === next) ?? null;
+  }
+
+  return current;
+}
+
+/** Walks parent links, nearest first, for mastery roll-up */
+export function ancestors(registry: ConceptRegistry, id: ConceptId): Concept[] {
+  const chain: Concept[] = [];
+  const seen = new Set<string>();
+  let current = canonical(registry, id);
+  while (current?.parentId && !seen.has(current.id)) {
+    seen.add(current.id);
+    const parent = canonical(registry, current.parentId);
+    if (!parent) break;
+    chain.push(parent);
+    current = parent;
+  }
+
+  return chain;
+}
+
+/** Distance from a root. A root is depth 0 */
+export function depth(registry: ConceptRegistry, id: ConceptId): number {
+  return ancestors(registry, id).length;
+}
+
+export type ResolveOutcome =
+  | { status: "matched"; concept: Concept; registry: ConceptRegistry }
+  | { status: "created"; concept: Concept; registry: ConceptRegistry }
+  | { status: "ambiguous"; candidates: Concept[] };
+
+export interface ResolveOptions {
+  parentHint?: ConceptId;
+  now: Date;
+}
+
+/** Dice coefficient over character bigrams. Catches spelling variants only */
+function similarity(a: string, b: string): number {
+  if (a === b) return 1;
+  if (a.length < 2 || b.length < 2) return 0;
+  const bigrams = (s: string) => {
+    const out = new Map<string, number>();
+    for (let i = 0; i < s.length - 1; i++) {
+      const g = s.slice(i, i + 2);
+      out.set(g, (out.get(g) ?? 0) + 1);
+    }
+    return out;
+  };
+  const left = bigrams(a);
+  const right = bigrams(b);
+  let shared = 0;
+  for (const [gram, count] of left) {
+    shared += Math.min(count, right.get(gram) ?? 0);
+  }
+  return (2 * shared) / (a.length - 1 + b.length - 1);
+}
+
+const MATCH_THRESHOLD = 0.85;
+const AMBIGUOUS_THRESHOLD = 0.6;
+
+/** Single entry point from a natural-language term to a canonical concept.
+ * The model never writes a concept id directly
+ */
+export function resolveConcept(
+  registry: ConceptRegistry,
+  term: string,
+  options: ResolveOptions,
+): ResolveOutcome {
+  const key = normalizeTerm(term);
+  if (key.length === 0) {
+    return { status: "ambiguous", candidates: [] };
+  }
+
+  const live = registry.concepts.filter((c) => c.mergedInto === null);
+
+  const exact = live.find((c) => c.id === key || c.aliases.includes(key));
+  if (exact) {
+    return { status: "matched", concept: exact, registry };
+  }
+
+  const scored = live
+    .map((c) => ({
+      concept: c,
+      score: Math.max(
+        similarity(key, c.id),
+        ...c.aliases.map((a) => similarity(key, a)),
+        similarity(key, normalizeTerm(c.canonicalName)),
+      ),
+    }))
+    .sort((x, y) => y.score - x.score);
+
+  const best = scored[0];
+
+  if (best && best.score >= MATCH_THRESHOLD) {
+    const updated: Concept = {
+      ...best.concept,
+      aliases: [...best.concept.aliases, key],
+    };
+    return {
+      status: "matched",
+      concept: updated,
+      registry: replaceConcept(registry, updated, options.now),
+    };
+  }
+
+  const nearby = scored
+    .filter((s) => s.score >= AMBIGUOUS_THRESHOLD)
+    .map((s) => s.concept);
+  if (nearby.length > 0) {
+    return { status: "ambiguous", candidates: nearby.slice(0, 5) };
+  }
+
+  return createConcept(registry, key, term, options);
+}
+
+function createConcept(
+  registry: ConceptRegistry,
+  id: string,
+  originalTerm: string,
+  options: ResolveOptions,
+): ResolveOutcome {
+  const parent = resolveParent(registry, options.parentHint);
+
+  const concept: Concept = {
+    id: id as ConceptId,
+    canonicalName: originalTerm.trim(),
+    aliases: [],
+    parentId: parent,
+    source: "proposed",
+    createdAt: options.now.toISOString(),
+    mergedInto: null,
+  };
+
+  return {
+    status: "created",
+    concept,
+    registry: {
+      ...registry,
+      updatedAt: options.now.toISOString(),
+      concepts: [...registry.concepts, concept],
+    },
+  };
+}
+
+/**
+ * Enforces the two structural rules on parenthood: the parent must already
+ * exist, and attaching to a parent at max depth grafts the concept as its
+ * sibling instead of deepening the tree.
+ */
+function resolveParent(
+  registry: ConceptRegistry,
+  hint: ConceptId | undefined,
+): ConceptId | null {
+  if (hint === undefined) return null;
+
+  const parent = canonical(registry, hint);
+  if (parent === null) return null;
+
+  if (depth(registry, parent.id) >= MAX_CONCEPT_DEPTH - 1) {
+    return parent.parentId;
+  }
+  return parent.id;
+}
+
+function replaceConcept(
+  registry: ConceptRegistry,
+  concept: Concept,
+  now: Date,
+): ConceptRegistry {
+  return {
+    ...registry,
+    updatedAt: now.toISOString(),
+    concepts: registry.concepts.map((c) => (c.id === concept.id ? concept : c)),
+  };
+}

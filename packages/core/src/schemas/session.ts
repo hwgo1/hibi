@@ -1,0 +1,96 @@
+import { z } from "zod";
+import { ConceptIdSchema } from "../concepts";
+import {
+  FindingIdSchema,
+  IntentIdSchema,
+  IsoDateTimeSchema,
+  SessionIdSchema,
+  UnitIntervalSchema,
+  UserIdSchema,
+} from "../ids";
+
+/** Locates a snippet without relying on line numbers, which drafts as soon as the user edits above the anchor.
+ * `contentHash` detects a stale anchor; `snippet` allows re-locating it
+ */
+export const CodeAnchorSchema = z.object({
+  filePath: z.string().min(1),
+  snippet: z.string().min(1),
+  contentHash: z.string().min(1),
+  approxLine: z.number().int().positive().optional(),
+});
+
+export type CodeAnchor = z.infer<typeof CodeAnchorSchema>;
+
+export const FindingSchema = z.object({
+  id: FindingIdSchema,
+  conceptId: ConceptIdSchema,
+  anchor: CodeAnchorSchema,
+  summary: z.string().min(1),
+  pedagogicValue: UnitIntervalSchema,
+  isRecurring: z.boolean().default(false),
+  status: z.enum(["triaged", "deferred", "resolved"]).default("deferred"),
+});
+
+export type Finding = z.infer<typeof FindingSchema>;
+
+export const HINT_STEPS = [1, 2, 3] as const;
+export const HintStepSchema = z.union([
+  z.literal(1),
+  z.literal(2),
+  z.literal(3),
+]);
+export type HintStep = z.infer<typeof HintStepSchema>;
+
+const IntentBase = {
+  id: IntentIdSchema,
+  createdAt: IsoDateTimeSchema,
+  status: z.enum(["active", "done", "abandoned"]).default("active"),
+};
+
+/**
+ * Intents are the unit the hint ladder applies to. Only `resolve` carries a step:
+ * exposition and exercises statements are never withheld
+ */
+export const IntentSchema = z.discriminatedUnion("kind", [
+  z.object({
+    ...IntentBase,
+    kind: z.literal("explain"),
+    conceptId: ConceptIdSchema,
+  }),
+  z.object({
+    ...IntentBase,
+    kind: z.literal("resolve"),
+    conceptId: ConceptIdSchema,
+    target: z.discriminatedUnion("type", [
+      z.object({ type: z.literal("finding"), findingId: FindingIdSchema }),
+      z.object({ type: z.literal("exercise"), intentId: IntentIdSchema }),
+    ]),
+    entryStep: HintStepSchema,
+    step: HintStepSchema,
+    attempts: z.number().int().nonnegative().default(0),
+    hintsGiven: z.number().int().nonnegative().default(0),
+    lastHintAt: IsoDateTimeSchema.optional(),
+    userForcedDisclosure: z.boolean().default(false),
+  }),
+]);
+
+export type Intent = z.infer<typeof IntentSchema>;
+export type ResolveIntent = Extract<Intent, { kind: "resolve" }>;
+
+export const SESSION_STATE_SCHEMA_VERSION = 1;
+
+export const SessionStateSchema = z.object({
+  schemaVersion: z.literal(SESSION_STATE_SCHEMA_VERSION),
+  sessionId: SessionIdSchema,
+  userId: UserIdSchema,
+  repoRoot: z.string().min(1),
+  createdAt: IsoDateTimeSchema,
+  updatedAt: IsoDateTimeSchema,
+  intents: z.array(IntentSchema).default([]),
+  activeIntentId: IntentIdSchema.nullable().default(null),
+  findings: z.array(FindingSchema).default([]),
+  contextFiles: z.array(z.string().min(1)).default([]),
+  turnCount: z.number().int().nonnegative().default(0),
+});
+
+export type SessionState = z.infer<typeof SessionStateSchema>;
