@@ -18,14 +18,22 @@ export const CodeAnchorSchema = z.object({
   contentHash: z.string().min(1),
   approxLine: z.number().int().positive().optional(),
 });
-
 export type CodeAnchor = z.infer<typeof CodeAnchorSchema>;
+
+export const FindingOriginSchema = z.enum([
+  "audit",
+  "watcher",
+  "test-run",
+  "user-reported",
+]);
+export type FindingOrigin = z.infer<typeof FindingOriginSchema>;
 
 export const FindingSchema = z.object({
   id: FindingIdSchema,
   conceptId: ConceptIdSchema,
   anchor: CodeAnchorSchema,
   summary: z.string().min(1),
+  origin: FindingOriginSchema,
   pedagogicValue: UnitIntervalSchema,
   isRecurring: z.boolean().default(false),
   status: z.enum(["triaged", "deferred", "resolved"]).default("deferred"),
@@ -33,6 +41,8 @@ export const FindingSchema = z.object({
 
 export type Finding = z.infer<typeof FindingSchema>;
 
+/** How long an active intent may sit untouched before a resume marks it stale */
+export const STALE_INTENT_THRESHOLD_MS = 72 * 60 * 60 * 1000; // 3 days
 export const HINT_STEPS = [1, 2, 3] as const;
 export const HintStepSchema = z.union([
   z.literal(1),
@@ -44,7 +54,8 @@ export type HintStep = z.infer<typeof HintStepSchema>;
 const IntentBase = {
   id: IntentIdSchema,
   createdAt: IsoDateTimeSchema,
-  status: z.enum(["active", "done", "abandoned"]).default("active"),
+  lastTouchedAt: IsoDateTimeSchema,
+  status: z.enum(["active", "done", "abandoned", "stale"]).default("active"),
 };
 
 /**

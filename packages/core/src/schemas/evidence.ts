@@ -17,6 +17,7 @@ export const EVIDENCE_KINDS = [
   "audit_finding",
   "test_run",
   "external_code_detected",
+  "intent_abandoned",
 ] as const;
 
 export const EvidenceKindSchema = z.enum(EVIDENCE_KINDS);
@@ -34,6 +35,7 @@ export const EvidenceEventSchema = z.object({
   at: IsoDateTimeSchema,
   userId: UserIdSchema,
   sessionId: SessionIdSchema,
+  turnIndex: z.number().int().nonnegative(),
   kind: EvidenceKindSchema,
   conceptId: ConceptIdSchema,
   /** How much this event says about the learner */

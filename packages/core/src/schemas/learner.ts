@@ -23,6 +23,8 @@ export type TeachingPreferences = z.infer<typeof TeachingPreferencesSchema>;
 export const DEFAULT_TEACHING_PREFERENCES: TeachingPreferences =
   TeachingPreferencesSchema.parse({});
 
+export const MASTERY_FORMULA_VERSION = 1;
+
 export const MasteryEntrySchema = z.object({
   conceptId: ConceptIdSchema,
   level: UnitIntervalSchema,
@@ -32,6 +34,8 @@ export const MasteryEntrySchema = z.object({
   directEvidenceCount: z.number().int().nonnegative(),
   /** Events rolled up from descendants, weighted by distance */
   rolledUpEvidenceCount: z.number().int().nonnegative(),
+  computedAt: IsoDateTimeSchema,
+  formulaVersion: z.number().int().positive(),
   lastSeenAt: IsoDateTimeSchema,
 });
 
