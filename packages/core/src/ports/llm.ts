@@ -36,12 +36,12 @@ export type CompletionEvent =
   | { type: "error"; message: string; retryable: boolean };
 
 export interface ProviderCapabilities {
-  supportTools: boolean;
+  supportsTools: boolean;
   /**
    * Whether the model reliably respects instruction-level constraints such as hint depth.
    * Models bellow this bar degrade the tutor and are warned about.
    */
-  meetsTutorBaseLine: boolean;
+  meetsTutorBaseline: boolean;
 }
 
 export interface LLMProvider {
