@@ -8,6 +8,11 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.125.0",
+    "openai": "^7.15.0",
     "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
   }
 }
