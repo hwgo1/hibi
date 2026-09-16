@@ -70,8 +70,16 @@ export const IntentSchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     ...IntentBase,
+    kind: z.literal("exercise"),
+    conceptId: ConceptIdSchema,
+    statement: z.string().min(1),
+    targetFile: z.string().min(1).optional(),
+  }),
+  z.object({
+    ...IntentBase,
     kind: z.literal("resolve"),
     conceptId: ConceptIdSchema,
+    /** What is being worked on: an exercise hibi set or a finding it made */
     target: z.discriminatedUnion("type", [
       z.object({ type: z.literal("finding"), findingId: FindingIdSchema }),
       z.object({ type: z.literal("exercise"), intentId: IntentIdSchema }),
@@ -80,6 +88,7 @@ export const IntentSchema = z.discriminatedUnion("kind", [
     step: HintStepSchema,
     attempts: z.number().int().nonnegative().default(0),
     hintsGiven: z.number().int().nonnegative().default(0),
+    attemptsAtLastHint: z.number().int().nonnegative().default(0),
     lastHintAt: IsoDateTimeSchema.optional(),
     userForcedDisclosure: z.boolean().default(false),
   }),
