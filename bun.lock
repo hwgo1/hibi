@@ -9,6 +9,21 @@
         "typescript": "^5.6.0",
       },
     },
+    "packages/cli": {
+      "name": "@hibi/cli",
+      "version": "0.0.0",
+      "bin": {
+        "hibi": "./src/main.ts",
+      },
+      "dependencies": {
+        "@hibi/core": "workspace:*",
+        "@hibi/daemon": "workspace:*",
+        "zod": "^4.0.0",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+      },
+    },
     "packages/core": {
       "name": "@hibi/core",
       "version": "0.0.0",
@@ -21,13 +36,28 @@
         "@types/bun": "latest",
       },
     },
+    "packages/daemon": {
+      "name": "@hibi/daemon",
+      "version": "0.0.0",
+      "dependencies": {
+        "@hibi/core": "workspace:*",
+        "zod": "^4.0.0",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+      },
+    },
   },
   "packages": {
     "@anthropic-ai/sdk": ["@anthropic-ai/sdk@0.125.0", "", { "dependencies": { "json-schema-to-ts": "^3.1.1", "standardwebhooks": "^1.0.0" }, "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" }, "optionalPeers": ["zod"], "bin": { "anthropic-ai-sdk": "bin/cli" } }, "sha512-Hq5wYlXupzJ9M1Fzqjqa3hObcuigEXVZJqSYDgeZGM3wF4qrNERM5Z1OOAeoT9rlod8awJ3uYyJjbQXp1ckIGg=="],
 
     "@babel/runtime": ["@babel/runtime@7.29.7", "", {}, "sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw=="],
 
+    "@hibi/cli": ["@hibi/cli@workspace:packages/cli"],
+
     "@hibi/core": ["@hibi/core@workspace:packages/core"],
+
+    "@hibi/daemon": ["@hibi/daemon@workspace:packages/daemon"],
 
     "@stablelib/base64": ["@stablelib/base64@1.0.1", "", {}, "sha512-1bnPQqSxSuc3Ii6MhBysoWCg58j97aUjuCSZrGSmDxNqtytIi0k8utUenAwTZN4V5mXXYGsVUI9zeBqy+jBOSQ=="],
 

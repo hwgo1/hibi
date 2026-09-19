@@ -16,7 +16,7 @@ import type {
 const TUTOR_BASELINE_MODELS = new Set(["gpt-4.1", "gpt-4o", "o3", "o4-mini"]);
 
 export interface OpenAIProviderOptions {
-  apikey: string;
+  apiKey: string;
   model: string;
   baseUrl?: string;
 }
@@ -31,7 +31,7 @@ export class OpenAIProvider implements LLMProvider {
   constructor(options: OpenAIProviderOptions) {
     this.model = options.model;
     this.client = new OpenAI({
-      apiKey: options.apikey,
+      apiKey: options.apiKey,
       baseURL: options.baseUrl,
     });
     this.capabilities = {
