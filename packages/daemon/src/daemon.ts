@@ -33,7 +33,7 @@ import { TurnQueue } from "./turn-queue";
 
 const LOCAL_USER = "local" as UserId;
 
-/** Transcript is kept in memory only, durable state lives in the session file */
+/** Transcript is kept in memory only: durable state lives in the session file. */
 const TRANSCRIPT_CAP = 24;
 
 export interface DaemonOptions {
@@ -126,6 +126,7 @@ export class Daemon {
 
   private attach(socket: Socket): void {
     this.clients.add(socket);
+    socket.setNoDelay(true);
     let buffer = "";
 
     socket.on("data", (chunk) => {
@@ -167,6 +168,13 @@ export class Daemon {
       return;
     }
 
+    if (request.type === "clear") {
+      this.clearTranscript();
+      socket.write(encode({ type: "ok", message: "conversation cleared" }));
+      socket.write(encode({ type: "turn_end" }));
+      return;
+    }
+
     if (request.type === "shutdown") {
       socket.write(encode({ type: "turn_end" }));
       await this.stop();
@@ -174,6 +182,10 @@ export class Daemon {
     }
 
     await this.queue.run(() => this.runTurn(request.text));
+  }
+
+  private clearTranscript(): void {
+    this.transcript = [];
   }
 
   /**
@@ -186,20 +198,31 @@ export class Daemon {
     socket: Socket,
   ): Promise<void> {
     const learner = await this.storage.loadLearnerModel(LOCAL_USER);
+
     if (learner === null) {
       socket.write(encode({ type: "error", message: "no profile yet" }));
       socket.write(encode({ type: "turn_end" }));
       return;
     }
 
-    const candidate = { ...learner.preferences, [key]: value };
-    const parsed = TeachingPreferencesSchema.safeParse(candidate);
+    if (!Object.keys(learner.preferences).includes(key)) {
+      socket.write(
+        encode({ type: "error", message: `unknown preference: ${key}` }),
+      );
+      socket.write(encode({ type: "turn_end" }));
+      return;
+    }
 
-    if (!parsed.success || !Object.keys(learner.preferences).includes(key)) {
+    const parsed = TeachingPreferencesSchema.safeParse({
+      ...learner.preferences,
+      [key]: value,
+    });
+
+    if (!parsed.success) {
       socket.write(
         encode({
           type: "error",
-          message: `invalid preference: ${key}=${value}`,
+          message: `invalid value for ${key}: ${value}`,
         }),
       );
       socket.write(encode({ type: "turn_end" }));
@@ -234,6 +257,13 @@ export class Daemon {
           this.broadcast({ type: "text", text: event.text });
         } else if (event.type === "tool") {
           this.broadcast({ type: "tool", name: event.name });
+        } else if (event.type === "usage") {
+          this.broadcast({
+            type: "usage",
+            inputTokens: event.usage.inputTokens,
+            outputTokens: event.usage.outputTokens,
+            model: event.model,
+          });
         } else {
           this.broadcast({ type: "error", message: event.message });
         }

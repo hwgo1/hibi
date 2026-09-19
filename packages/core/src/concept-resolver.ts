@@ -15,6 +15,46 @@ export function normalizeTerm(term: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+const MAX_TERM_WORDS = 4;
+
+const QUESTION_PREFIXES = [
+  "how",
+  "what",
+  "why",
+  "when",
+  "where",
+  "which",
+  "who",
+  "can",
+  "does",
+  "is",
+  "should",
+];
+
+/**
+ * Rejects terms that are questions or sentences rather than durable topics.
+ * Returns a reason when the term is unusable, or null when it is fine
+ */
+export function validateConceptTerm(term: string): string | null {
+  if (/\?/.test(term))
+    return "looks like a question — pass the topic it is about";
+
+  const normalized = normalizeTerm(term);
+  if (normalized.length === 0) return "empty term";
+
+  const words = normalized.split("-").filter((word) => word.length > 0);
+  if (words.length > MAX_TERM_WORDS) {
+    return `too long (${words.length} words) — pass the underlying topic instead`;
+  }
+
+  const first = words[0];
+  if (first !== undefined && QUESTION_PREFIXES.includes(first)) {
+    return "looks like a question — pass the topic it is about";
+  }
+
+  return null;
+}
+
 /** Follows merge pointers to the surviving concept */
 export function canonical(
   registry: ConceptRegistry,
@@ -22,12 +62,16 @@ export function canonical(
 ): Concept | null {
   const seen = new Set<string>();
   let current = registry.concepts.find((c) => c.id === id) ?? null;
-  while (current?.mergedInto && !seen.has(current.id)) {
+
+  while (
+    current !== null &&
+    current.mergedInto !== null &&
+    !seen.has(current.id)
+  ) {
     seen.add(current.id);
-    const next: string = current.mergedInto;
+    const next = current.mergedInto;
     current = registry.concepts.find((c) => c.id === next) ?? null;
   }
-
   return current;
 }
 
@@ -36,14 +80,18 @@ export function ancestors(registry: ConceptRegistry, id: ConceptId): Concept[] {
   const chain: Concept[] = [];
   const seen = new Set<string>();
   let current = canonical(registry, id);
-  while (current?.parentId && !seen.has(current.id)) {
+
+  while (
+    current !== null &&
+    current.parentId !== null &&
+    !seen.has(current.id)
+  ) {
     seen.add(current.id);
     const parent = canonical(registry, current.parentId);
-    if (!parent) break;
+    if (parent === null) break;
     chain.push(parent);
     current = parent;
   }
-
   return chain;
 }
 
@@ -58,6 +106,10 @@ export type ResolveOutcome =
   | { status: "ambiguous"; candidates: Concept[] };
 
 export interface ResolveOptions {
+  /**
+   * Parent proposed by the caller. Must already exist in the registry:
+   * a concept and its parent are never created in the same operation.
+   */
   parentHint?: ConceptId;
   now: Date;
 }
@@ -66,14 +118,16 @@ export interface ResolveOptions {
 function similarity(a: string, b: string): number {
   if (a === b) return 1;
   if (a.length < 2 || b.length < 2) return 0;
+
   const bigrams = (s: string) => {
     const out = new Map<string, number>();
     for (let i = 0; i < s.length - 1; i++) {
-      const g = s.slice(i, i + 2);
-      out.set(g, (out.get(g) ?? 0) + 1);
+      const gram = s.slice(i, i + 2);
+      out.set(gram, (out.get(gram) ?? 0) + 1);
     }
     return out;
   };
+
   const left = bigrams(a);
   const right = bigrams(b);
   let shared = 0;
@@ -86,9 +140,7 @@ function similarity(a: string, b: string): number {
 const MATCH_THRESHOLD = 0.85;
 const AMBIGUOUS_THRESHOLD = 0.6;
 
-/** Single entry point from a natural-language term to a canonical concept.
- * The model never writes a concept id directly
- */
+/** Single entry point from a natural-language term to concept. The model never writes a concept id directly */
 export function resolveConcept(
   registry: ConceptRegistry,
   term: string,
@@ -111,7 +163,7 @@ export function resolveConcept(
       concept: c,
       score: Math.max(
         similarity(key, c.id),
-        ...c.aliases.map((a) => similarity(key, a)),
+        ...c.aliases.map((alias) => similarity(key, alias)),
         similarity(key, normalizeTerm(c.canonicalName)),
       ),
     }))
@@ -132,8 +184,9 @@ export function resolveConcept(
   }
 
   const nearby = scored
-    .filter((s) => s.score >= AMBIGUOUS_THRESHOLD)
-    .map((s) => s.concept);
+    .filter((entry) => entry.score >= AMBIGUOUS_THRESHOLD)
+    .map((entry) => entry.concept);
+
   if (nearby.length > 0) {
     return { status: "ambiguous", candidates: nearby.slice(0, 5) };
   }
@@ -147,13 +200,11 @@ function createConcept(
   originalTerm: string,
   options: ResolveOptions,
 ): ResolveOutcome {
-  const parent = resolveParent(registry, options.parentHint);
-
   const concept: Concept = {
     id: id as ConceptId,
     canonicalName: originalTerm.trim(),
     aliases: [],
-    parentId: parent,
+    parentId: resolveParent(registry, options.parentHint),
     source: "proposed",
     createdAt: options.now.toISOString(),
     mergedInto: null,

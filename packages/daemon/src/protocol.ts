@@ -13,6 +13,7 @@ export const ClientRequestSchema = z.discriminatedUnion("type", [
     key: z.string().min(1),
     value: z.string().min(1),
   }),
+  z.object({ type: z.literal("clear") }),
   z.object({ type: z.literal("shutdown") }),
 ]);
 
@@ -22,6 +23,7 @@ export type ServerEvent =
   | { type: "text"; text: string }
   | { type: "tool"; name: string }
   | { type: "step"; step: 1 | 2 | 3 }
+  | { type: "usage"; inputTokens: number; outputTokens: number; model: string }
   | { type: "turn_end" }
   | { type: "state"; payload: unknown }
   | { type: "profile"; payload: unknown }
@@ -39,6 +41,7 @@ export function decodeLines<T>(buffer: string): {
   const parts = buffer.split("\n");
   const rest = parts.pop() ?? "";
   const messages: T[] = [];
+
   for (const part of parts) {
     if (part.trim().length === 0) continue;
     messages.push(JSON.parse(part) as T);

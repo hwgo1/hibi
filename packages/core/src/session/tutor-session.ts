@@ -2,9 +2,10 @@ import type { ConceptRegistry } from "../concepts";
 import { seedRegistry } from "../concepts";
 import type { EvidenceId, SessionId, UserId } from "../ids";
 import type {
-  CompletionEvent,
   LLMProvider,
   ProviderMessage,
+  TokenUsage,
+  ToolCall,
   ToolResult,
 } from "../ports/llm";
 import type { Clock, Storage } from "../ports/storage";
@@ -12,6 +13,7 @@ import type { Workspace } from "../ports/workspace";
 import { computeMastery } from "../policy/mastery";
 import type { EvidenceEvent, EvidenceKind } from "../schemas/evidence";
 import type { LearnerModel } from "../schemas/learner";
+import { DEFAULT_TEACHING_PREFERENCES } from "../schemas/learner";
 import type { SessionState } from "../schemas/session";
 import type { ToolContext } from "../tools";
 import { buildToolRegistry } from "../tools";
@@ -30,7 +32,16 @@ const TRANSCRIPT_WINDOW = 12;
 export type TurnEvent =
   | { type: "text"; text: string }
   | { type: "tool"; name: string }
+  | { type: "usage"; usage: TokenUsage; model: string }
   | { type: "error"; message: string };
+
+interface CompletionOutcome {
+  textChunks: string[];
+  toolCalls: ToolCall[];
+  stopReason: "end_turn" | "tool_use" | "max_tokens";
+  error: string | null;
+  usage: TokenUsage | null;
+}
 
 export interface TutorSessionDeps {
   provider: LLMProvider;
@@ -47,9 +58,9 @@ export class TutorSession {
   }
 
   /**
-   * Runs one turn: loads state, builds the prompt, drives the tool loop, then persists.
-   * Evidence is buffered and written only on success, so a turn that
-   * fails midway leaves no record of work that did not happen
+   * Runs one turn: loads state, builds the prompt, drives the tool loop, then
+   * persists. Evidence is buffered and written only on success, so a turn that
+   * fails midway leaves no record of work that did not happen.
    */
   async *turn(
     session: SessionState,
@@ -87,16 +98,16 @@ export class TutorSession {
       { role: "user", content: userMessage },
     ];
 
-    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-      const result = await this.runCompletion(
-        provider,
-        system,
-        messages,
-        (event) => event,
-      );
+    let turnUsage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
 
-      for (const text of result.textChunks) {
-        yield { type: "text", text };
+    for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+      const result = yield* this.runCompletion(provider, system, messages);
+
+      if (result.usage !== null) {
+        turnUsage = {
+          inputTokens: turnUsage.inputTokens + result.usage.inputTokens,
+          outputTokens: turnUsage.outputTokens + result.usage.outputTokens,
+        };
       }
 
       if (result.error !== null) {
@@ -132,45 +143,56 @@ export class TutorSession {
       if (result.stopReason !== "tool_use") break;
     }
 
+    yield { type: "usage", usage: turnUsage, model: provider.model };
     await this.persist(context, now);
   }
 
-  private async runCompletion(
+  /**
+   * Consumes one provider stream, forwarding text as it arrives and returning
+   * the turn summary once the stream ends
+   */
+  private async *runCompletion(
     provider: LLMProvider,
     system: string,
     messages: ProviderMessage[],
-    tap: (event: CompletionEvent) => CompletionEvent,
-  ) {
+  ): AsyncGenerator<TurnEvent, CompletionOutcome> {
     for (let attempt = 0; ; attempt++) {
       const textChunks: string[] = [];
-      const toolCalls: Array<{ id: string; name: string; arguments: unknown }> =
-        [];
+      const toolCalls: ToolCall[] = [];
       let stopReason: "end_turn" | "tool_use" | "max_tokens" = "end_turn";
       let error: string | null = null;
       let retryable = false;
+      let usage: TokenUsage | null = null;
 
-      for await (const raw of provider.complete({
+      for await (const event of provider.complete({
         system,
         messages,
         tools: this.tools.definitions(),
         maxTokens: MAX_TOKENS,
       })) {
-        const event = tap(raw);
-        if (event.type === "text_delta") textChunks.push(event.text);
-        else if (event.type === "tool_call") toolCalls.push(event.call);
-        else if (event.type === "done") stopReason = event.stopReason;
-        else if (event.type === "error") {
+        if (event.type === "text_delta") {
+          textChunks.push(event.text);
+          yield { type: "text", text: event.text };
+        } else if (event.type === "tool_call") {
+          toolCalls.push(event.call);
+        } else if (event.type === "usage") {
+          usage = event.usage;
+        } else if (event.type === "done") {
+          stopReason = event.stopReason;
+        } else if (event.type === "error") {
           error = event.message;
           retryable = event.retryable;
         }
       }
 
       if (error !== null && retryable && attempt < MAX_RETRIES) {
-        await new Promise((r) => setTimeout(r, RETRY_BASE_MS * 2 ** attempt));
+        await new Promise((resolve) =>
+          setTimeout(resolve, RETRY_BASE_MS * 2 ** attempt),
+        );
         continue;
       }
 
-      return { textChunks, toolCalls, stopReason, error };
+      return { textChunks, toolCalls, stopReason, error, usage };
     }
   }
 
@@ -184,13 +206,7 @@ export class TutorSession {
       userId,
       createdAt: at,
       updatedAt: at,
-      preferences: {
-        language: "pt-BR",
-        theoryDepth: "balanced",
-        exerciseSize: "medium",
-        unsolicitedHints: "when-stuck",
-        explanationStyle: "concise",
-      },
+      preferences: DEFAULT_TEACHING_PREFERENCES,
       mastery: [],
       recurringErrors: [],
       inferredSignals: [],
@@ -235,7 +251,8 @@ export class TutorSession {
     await storage.saveConceptRegistry(context.session.userId, context.registry);
 
     const changesMastery = context.pendingEvidence.some(
-      (e) => e.kind === "attempt_submitted" || e.kind === "test_run",
+      (event) =>
+        event.kind === "attempt_submitted" || event.kind === "test_run",
     );
     if (!changesMastery) return;
 

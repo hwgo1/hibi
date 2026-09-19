@@ -6,19 +6,20 @@ import type {
   LLMProvider,
   ProviderCapabilities,
   ProviderMessage,
+  TokenUsage,
 } from "../ports/llm";
 
 /**
  * Models that reliably respect instruction-level constraints such as hint
  * depth. Smaller variants tend to answer with the full solution regardless of
- * the depth instruction, which defeats the tutor, so they are flagged.
+ * the depth instruction, so they are flagged
  */
 const TUTOR_BASELINE_MODELS = new Set(["gpt-4.1", "gpt-4o", "o3", "o4-mini"]);
 
 export interface OpenAIProviderOptions {
   apiKey: string;
   model: string;
-  baseUrl?: string;
+  baseURL?: string;
 }
 
 export class OpenAIProvider implements LLMProvider {
@@ -32,7 +33,7 @@ export class OpenAIProvider implements LLMProvider {
     this.model = options.model;
     this.client = new OpenAI({
       apiKey: options.apiKey,
-      baseURL: options.baseUrl,
+      baseURL: options.baseURL,
     });
     this.capabilities = {
       supportsTools: true,
@@ -51,6 +52,7 @@ export class OpenAIProvider implements LLMProvider {
         out.push({ role: "user", content: message.content });
         continue;
       }
+
       if (message.role === "assistant") {
         out.push({
           role: "assistant",
@@ -91,11 +93,13 @@ export class OpenAIProvider implements LLMProvider {
     >();
 
     let stream: AsyncIterable<OpenAI.ChatCompletionChunk>;
+
     try {
       stream = await this.client.chat.completions.create({
         model: this.model,
         max_completion_tokens: request.maxTokens,
         stream: true,
+        stream_options: { include_usage: true },
         messages: [
           { role: "system", content: request.system },
           ...this.toApiMessages(request.messages),
@@ -115,9 +119,17 @@ export class OpenAIProvider implements LLMProvider {
     }
 
     let finish: OpenAI.ChatCompletionChunk.Choice["finish_reason"] = null;
+    let usage: TokenUsage | null = null;
 
     try {
       for await (const chunk of stream) {
+        if (chunk.usage != null) {
+          usage = {
+            inputTokens: chunk.usage.prompt_tokens,
+            outputTokens: chunk.usage.completion_tokens,
+          };
+        }
+
         const choice = chunk.choices[0];
         if (choice === undefined) continue;
 
@@ -164,6 +176,10 @@ export class OpenAIProvider implements LLMProvider {
       };
     }
 
+    if (usage !== null) {
+      yield { type: "usage", usage };
+    }
+
     yield {
       type: "done",
       stopReason:
@@ -177,7 +193,7 @@ export class OpenAIProvider implements LLMProvider {
 }
 
 function classifyOpenAIError(error: unknown): CompletionEvent {
-  const status = (error as { status: number }).status;
+  const status = (error as { status?: number }).status;
   const message = error instanceof Error ? error.message : String(error);
   const retryable = status === 429 || (status !== undefined && status >= 500);
   return { type: "error", message, retryable };

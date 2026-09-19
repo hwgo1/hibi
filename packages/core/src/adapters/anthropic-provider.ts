@@ -6,6 +6,7 @@ import type {
   LLMProvider,
   ProviderCapabilities,
   ProviderMessage,
+  TokenUsage,
 } from "../ports/llm";
 
 const TUTOR_BASELINE_PREFIXES = ["claude-opus", "claude-sonnet"];
@@ -31,8 +32,8 @@ export class AnthropicProvider implements LLMProvider {
     });
     this.capabilities = {
       supportsTools: true,
-      meetsTutorBaseline: TUTOR_BASELINE_PREFIXES.some((p) =>
-        options.model.startsWith(p),
+      meetsTutorBaseline: TUTOR_BASELINE_PREFIXES.some((prefix) =>
+        options.model.startsWith(prefix),
       ),
     };
   }
@@ -49,6 +50,7 @@ export class AnthropicProvider implements LLMProvider {
         out.push({ role: "user", content: message.content });
         continue;
       }
+
       if (message.role === "assistant") {
         const blocks: Anthropic.ContentBlockParam[] = [];
         if (message.content.length > 0) {
@@ -65,6 +67,7 @@ export class AnthropicProvider implements LLMProvider {
         out.push({ role: "assistant", content: blocks });
         continue;
       }
+
       out.push({
         role: "user",
         content: message.results.map((result) => ({
@@ -85,6 +88,7 @@ export class AnthropicProvider implements LLMProvider {
       { id: string; name: string; json: string }
     >();
     let stopReason: string | null = null;
+    let usage: TokenUsage | null = null;
 
     try {
       const stream = this.client.messages.stream({
@@ -100,6 +104,14 @@ export class AnthropicProvider implements LLMProvider {
       });
 
       for await (const event of stream) {
+        if (event.type === "message_start") {
+          usage = {
+            inputTokens: event.message.usage.input_tokens,
+            outputTokens: 0,
+          };
+          continue;
+        }
+
         if (
           event.type === "content_block_start" &&
           event.content_block.type === "tool_use"
@@ -124,11 +136,13 @@ export class AnthropicProvider implements LLMProvider {
           continue;
         }
 
-        if (
-          event.type === "message_delta" &&
-          event.delta.stop_reason !== null
-        ) {
-          stopReason = event.delta.stop_reason;
+        if (event.type === "message_delta") {
+          if (usage !== null) {
+            usage = { ...usage, outputTokens: event.usage.output_tokens };
+          }
+          if (event.delta.stop_reason !== null) {
+            stopReason = event.delta.stop_reason;
+          }
         }
       }
     } catch (error) {
@@ -152,6 +166,10 @@ export class AnthropicProvider implements LLMProvider {
         type: "tool_call",
         call: { id: slot.id, name: slot.name, arguments: parsed },
       };
+    }
+
+    if (usage !== null) {
+      yield { type: "usage", usage };
     }
 
     yield {

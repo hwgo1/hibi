@@ -1,7 +1,11 @@
 import { z } from "zod";
 
 import type { ConceptId } from "../concepts";
-import { resolveConcept } from "../concept-resolver";
+import {
+  resolveConcept,
+  validateConceptTerm,
+  type ResolveOutcome,
+} from "../concept-resolver";
 import type { IntentId } from "../ids";
 import {
   deriveEntryStep,
@@ -12,6 +16,8 @@ import type { ResolveIntent } from "../schemas/session";
 import type { ToolContext } from "./context";
 import type { Tool } from "./registry";
 
+type ResolveResult = ResolveOutcome | { status: "rejected"; reason: string };
+
 function newId(prefix: string): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -20,11 +26,19 @@ function newId(prefix: string): string {
  * Resolves a natural-language term to a canonical concept and stores the
  * possibly-updated registry back on the context.
  */
-function resolve(context: ToolContext, term: string, parentHint?: string) {
+function resolve(
+  context: ToolContext,
+  term: string,
+  parentHint?: string,
+): ResolveResult {
+  const problem = validateConceptTerm(term);
+  if (problem !== null) return { status: "rejected", reason: problem };
+
   const outcome = resolveConcept(context.registry, term, {
     parentHint: parentHint as ConceptId | undefined,
     now: context.clock.now(),
   });
+
   if (outcome.status === "ambiguous") return outcome;
   context.registry = outcome.registry;
   return outcome;
@@ -49,36 +63,45 @@ export const explainConcept: Tool<ToolContext> = {
       properties: {
         conceptTerm: {
           type: "string",
-          description: "The concept in the user's own words.",
+          description:
+            "The topic in English, at most four words. Never a question or a sentence.",
         },
         parentTerm: {
           type: "string",
-          description: "A broader existing concept, if known.",
+          description: "A broader concept that already exists in the registry.",
         },
       },
-      required: ["conceptTerm"],
+      required: ["conceptTerm", "parentTerm"],
     },
   },
 
   async execute(rawArgs, context) {
     const args = ExplainArgs.parse(rawArgs);
     const outcome = resolve(context, args.conceptTerm, args.parentTerm);
+
+    if (outcome.status === "rejected") {
+      return { content: `Not a concept: ${outcome.reason}`, isError: true };
+    }
     if (outcome.status === "ambiguous") {
       return {
-        content: `Ambiguous concept. Candidates: ${outcome.candidates.map((c) => c.canonicalName).join(", ")}. Ask the user which one.`,
+        content: `Ambiguous concept. Candidates: ${outcome.candidates
+          .map((c) => c.canonicalName)
+          .join(", ")}. Ask the user which one.`,
       };
     }
 
     const at = touch(context);
+    const id = newId("int") as IntentId;
+
     context.session.intents.push({
-      id: newId("int") as IntentId,
+      id,
       kind: "explain",
       conceptId: outcome.concept.id,
       createdAt: at,
       lastTouchedAt: at,
       status: "active",
     });
-    context.session.activeIntentId = context.session.intents.at(-1)!.id;
+    context.session.activeIntentId = id;
 
     context.pendingEvidence.push({
       kind: "concept_explained",
@@ -96,6 +119,7 @@ export const explainConcept: Tool<ToolContext> = {
 
 const ExerciseArgs = z.object({
   conceptTerm: z.string().min(1),
+  parentTerm: z.string().min(1).optional(),
   statement: z.string().min(1),
   targetFile: z.string().min(1).optional(),
 });
@@ -108,26 +132,39 @@ export const proposeExercise: Tool<ToolContext> = {
     parameters: {
       type: "object",
       properties: {
-        conceptTerm: { type: "string" },
+        conceptTerm: {
+          type: "string",
+          description:
+            "The topic in English, at most four words. Never a question or a sentence.",
+        },
+        parentTerm: {
+          type: "string",
+          description: "A broader concept that already exists in the registry.",
+        },
         statement: {
           type: "string",
           description: "The task, in the user's language.",
         },
         targetFile: { type: "string" },
       },
-      required: ["conceptTerm", "statement"],
+      required: ["conceptTerm", "parentTerm", "statement"],
     },
   },
 
   async execute(rawArgs, context) {
     const args = ExerciseArgs.parse(rawArgs);
-    const outcome = resolve(context, args.conceptTerm);
+    const outcome = resolve(context, args.conceptTerm, args.parentTerm);
+
+    if (outcome.status === "rejected") {
+      return { content: `Not a concept: ${outcome.reason}`, isError: true };
+    }
     if (outcome.status === "ambiguous") {
-      return { content: `Ambiguous concept. Ask the user which one.` };
+      return { content: "Ambiguous concept. Ask the user which one." };
     }
 
     const at = touch(context);
     const id = newId("int") as IntentId;
+
     context.session.intents.push({
       id,
       kind: "exercise",
@@ -220,8 +257,8 @@ export const giveHint: Tool<ToolContext> = {
         entryStep,
         step: entryStep,
         attempts: 0,
-        attemptsAtLastHint: 0,
         hintsGiven: 0,
+        attemptsAtLastHint: 0,
         createdAt: at,
         lastTouchedAt: at,
         status: "active",
@@ -238,8 +275,8 @@ export const giveHint: Tool<ToolContext> = {
 
     resolveIntent.step = step;
     resolveIntent.hintsGiven += 1;
-    resolveIntent.lastHintAt = at;
     resolveIntent.attemptsAtLastHint = resolveIntent.attempts;
+    resolveIntent.lastHintAt = at;
     resolveIntent.lastTouchedAt = at;
     if (args.userRequestedFullAnswer === true)
       resolveIntent.userForcedDisclosure = true;

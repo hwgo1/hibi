@@ -17,6 +17,11 @@ export interface ToolResult {
   isError?: boolean;
 }
 
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+}
+
 export type ProviderMessage =
   | { role: "user"; content: string }
   | { role: "assistant"; content: string; toolCalls?: ToolCall[] }
@@ -32,6 +37,7 @@ export interface CompletionRequest {
 export type CompletionEvent =
   | { type: "text_delta"; text: string }
   | { type: "tool_call"; call: ToolCall }
+  | { type: "usage"; usage: TokenUsage }
   | { type: "done"; stopReason: "end_turn" | "tool_use" | "max_tokens" }
   | { type: "error"; message: string; retryable: boolean };
 

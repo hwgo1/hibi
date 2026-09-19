@@ -2,14 +2,28 @@
 import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline/promises";
 
+import {
+  StorageLocal,
+  type LearnerModel,
+  type SessionState,
+  type UserId,
+} from "@hibi/core";
 import { Daemon, findRepoRoot, socketPath } from "@hibi/daemon";
-import { StorageLocal, type UserId } from "@hibi/core";
 
 import { DaemonClient } from "./client";
 import { HIBI_HOME, loadCredentials } from "./config";
+import { formatProfile, formatState } from "./format";
 import { buildProvider } from "./models";
 import { runOnboarding } from "./onboarding";
+import {
+  addUsage,
+  emptySpend,
+  formatSpend,
+  type SessionSpend,
+} from "./pricing";
 import { banner, ui } from "./render";
+import { Spinner } from "./spinner";
+import { Typewriter } from "./typewriter";
 
 const LOCAL_USER = "local" as UserId;
 const AUTOSTART_TIMEOUT_MS = 8000;
@@ -23,6 +37,9 @@ const PREFERENCE_KEYS = [
   "explanationStyle",
 ] as const;
 
+const HELP =
+  "/state [--json]  /profile [--json]  /prefs [key value]  /clear  /cost  /stop  /exit";
+
 async function runDaemon(repoRoot: string): Promise<void> {
   const credentials = await loadCredentials();
   if (credentials === null) {
@@ -34,10 +51,8 @@ async function runDaemon(repoRoot: string): Promise<void> {
   const daemon = new Daemon({ repoRoot, provider });
   await daemon.start();
 
-  process.stdout.write(banner(provider.model, repoRoot));
-  process.stdout.write(
-    ui.dim(`listening on ${socketPath(repoRoot, HIBI_HOME)}\n`),
-  );
+  stdout.write(banner(provider.model, repoRoot));
+  stdout.write(ui.dim(`listening on ${socketPath(repoRoot, HIBI_HOME)}\n`));
 
   await new Promise(() => {});
 }
@@ -51,7 +66,7 @@ async function ensureDaemon(repoRoot: string): Promise<DaemonClient> {
     await client.connect(path);
     return client;
   } catch {
-    process.stdout.write(ui.dim("starting daemon…\n"));
+    stdout.write(ui.dim("starting daemon…\n"));
   }
 
   Bun.spawn(["bun", import.meta.path, "daemon"], {
@@ -62,8 +77,9 @@ async function ensureDaemon(repoRoot: string): Promise<DaemonClient> {
   }).unref();
 
   const deadline = Date.now() + AUTOSTART_TIMEOUT_MS;
+
   for (;;) {
-    await new Promise((r) => setTimeout(r, AUTOSTART_POLL_MS));
+    await new Promise((resolve) => setTimeout(resolve, AUTOSTART_POLL_MS));
     try {
       const client = new DaemonClient();
       await client.connect(path);
@@ -100,7 +116,7 @@ async function chat(repoRoot: string): Promise<void> {
 
   const provider = buildProvider(credentials);
   if (!provider.capabilities.meetsTutorBaseline) {
-    process.stdout.write(
+    stdout.write(
       ui.dim(
         `note: ${provider.model} may ignore hint-depth limits and give full answers\n`,
       ),
@@ -108,19 +124,68 @@ async function chat(repoRoot: string): Promise<void> {
   }
 
   const client = await ensureDaemon(repoRoot);
-  const indexed =
-    (await new StorageLocal(HIBI_HOME).loadRepoModel(repoRoot)) !== null;
+  const storage = new StorageLocal(HIBI_HOME);
+  const indexed = (await storage.loadRepoModel(repoRoot)) !== null;
+
+  let spend: SessionSpend = emptySpend();
+  let showRaw = false;
+
+  const typewriter = new Typewriter((text) => stdout.write(text));
+  const spinner = new Spinner((text) => stdout.write(text));
+  let streaming = false;
 
   client.onEvent((event) => {
-    if (event.type === "text") stdout.write(event.text);
-    else if (event.type === "tool")
-      stdout.write(ui.dim(`\n  · ${event.name}\n`));
-    else if (event.type === "step") stdout.write(`\n${ui.step(event.step)}\n`);
-    else if (event.type === "ok") stdout.write(ui.dim(`${event.message}\n`));
-    else if (event.type === "error")
+    if (event.type === "text") {
+      if (!streaming) {
+        spinner.stop();
+        streaming = true;
+      }
+      typewriter.push(event.text);
+      return;
+    }
+
+    if (event.type === "tool") {
+      spinner.start(event.name);
+      return;
+    }
+
+    if (event.type === "step") {
+      typewriter.push(`\n${ui.step(event.step)}\n`);
+      return;
+    }
+
+    if (event.type === "usage") {
+      spend = addUsage(
+        spend,
+        { inputTokens: event.inputTokens, outputTokens: event.outputTokens },
+        event.model,
+      );
+      return;
+    }
+
+    if (event.type === "turn_end") {
+      return;
+    }
+
+    spinner.stop();
+    typewriter.flush();
+
+    if (event.type === "ok") {
+      stdout.write(ui.dim(`${event.message}\n`));
+    } else if (event.type === "error") {
       process.stderr.write(`\n${event.message}\n`);
-    else if (event.type === "state" || event.type === "profile") {
-      stdout.write(`${JSON.stringify(event.payload, null, 2)}\n`);
+    } else if (event.type === "state") {
+      stdout.write(
+        showRaw
+          ? `${JSON.stringify(event.payload, null, 2)}\n`
+          : `${formatState(event.payload as SessionState)}\n`,
+      );
+    } else if (event.type === "profile") {
+      stdout.write(
+        showRaw
+          ? `${JSON.stringify(event.payload, null, 2)}\n`
+          : `${formatProfile(event.payload as LearnerModel)}\n`,
+      );
     }
   });
 
@@ -130,47 +195,68 @@ async function chat(repoRoot: string): Promise<void> {
   for (;;) {
     const text = (await rl.question(ui.prompt())).trim();
     if (text.length === 0) continue;
+
     if (text === "/exit") break;
 
     if (text === "/help") {
-      stdout.write(
-        ui.dim("/state  /profile  /prefs [key value]  /stop  /exit\n"),
-      );
+      stdout.write(ui.dim(`${HELP}\n`));
       continue;
     }
-    if (text === "/state") {
+    if (text.startsWith("/state")) {
+      showRaw = text.includes("--json");
       await client.sendAndWait({ type: "state" });
       continue;
     }
-    if (text === "/profile") {
+    if (text.startsWith("/profile")) {
+      showRaw = text.includes("--json");
       await client.sendAndWait({ type: "profile" });
       continue;
     }
     if (text.startsWith("/prefs")) {
-      await handlePrefs(text, client);
+      await handlePrefs(text, client, storage);
+      continue;
+    }
+    if (text === "/clear") {
+      await client.sendAndWait({ type: "clear" });
+      continue;
+    }
+    if (text === "/cost") {
+      stdout.write(`${ui.dim(formatSpend(spend))}\n`);
       continue;
     }
     if (text === "/stop") {
       await client.sendAndWait({ type: "shutdown" });
       break;
     }
+    if (text.startsWith("/")) {
+      stdout.write(ui.dim(`unknown command. ${HELP}\n`));
+      continue;
+    }
 
     stdout.write("\n");
+    streaming = false;
+    spinner.start("thinking");
+
     await client.sendAndWait({ type: "message", text });
-    stdout.write("\n\n");
+
+    spinner.stop();
+    await typewriter.drain();
+    stdout.write(`\n${ui.dim(formatSpend(spend))}\n\n`);
   }
 
   rl.close();
   client.close();
 }
 
-async function handlePrefs(input: string, client: DaemonClient): Promise<void> {
+async function handlePrefs(
+  input: string,
+  client: DaemonClient,
+  storage: StorageLocal,
+): Promise<void> {
   const [, key, value] = input.split(/\s+/);
 
   if (key === undefined || value === undefined) {
-    const learner = await new StorageLocal(HIBI_HOME).loadLearnerModel(
-      LOCAL_USER,
-    );
+    const learner = await storage.loadLearnerModel(LOCAL_USER);
     if (learner === null) {
       stdout.write(ui.dim("no profile yet\n"));
       return;
