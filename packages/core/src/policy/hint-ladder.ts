@@ -8,7 +8,7 @@ import type { HintStep, ResolveIntent } from "../schemas/session";
 export const STEP_INSTRUCTIONS: Record<HintStep, string> = {
   1: "Point at the region and name the concept involved. Do not state the specific problem and do not write any code.",
   2: "Name the problem precisely and show where it is. Do not write the correction.",
-  3: "Show the correction and explain why it works.",
+  3: "Show the correction and explain why it works. Then offer a short variation of the same problem, changed in context but not in structure, for the user to try without looking back.",
 };
 
 /** Signals available when a resolve intent is first created */
@@ -27,14 +27,12 @@ export function deriveEntryStep(context: EntryContext): HintStep {
   if (context.selfReportedAttempts >= 2) score += 1;
   if ((context.masteryLevel ?? 0) >= 0.6) score += 1;
 
-  if (score >= 3) return 2;
-
-  return 1;
+  return score >= 3 ? 2 : 1;
 }
 
 export const ESCALATION = {
   attemptsPerStep: 2,
-  stuckMs: 8 * 60 * 1000, // 8 min
+  stuckMs: 8 * 60 * 1000,
 } as const;
 
 export interface EscalationInput {

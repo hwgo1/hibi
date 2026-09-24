@@ -18,6 +18,7 @@ export const CodeAnchorSchema = z.object({
   contentHash: z.string().min(1),
   approxLine: z.number().int().positive().optional(),
 });
+
 export type CodeAnchor = z.infer<typeof CodeAnchorSchema>;
 
 export const FindingOriginSchema = z.enum([
@@ -34,7 +35,7 @@ export const FindingSchema = z.object({
   anchor: CodeAnchorSchema,
   summary: z.string().min(1),
   origin: FindingOriginSchema,
-  pedagogicValue: UnitIntervalSchema,
+  pedagogicalValue: UnitIntervalSchema,
   isRecurring: z.boolean().default(false),
   status: z.enum(["triaged", "deferred", "resolved"]).default("deferred"),
 });
@@ -55,18 +56,24 @@ const IntentBase = {
   id: IntentIdSchema,
   createdAt: IsoDateTimeSchema,
   lastTouchedAt: IsoDateTimeSchema,
+  /**
+   * `stale` is distinct from `abandoned`: abandonment is a statement the user
+   * made, staleness is an absence the system observed
+   */
   status: z.enum(["active", "done", "abandoned", "stale"]).default("active"),
 };
 
-/**
- * Intents are the unit the hint ladder applies to. Only `resolve` carries a step:
- * exposition and exercises statements are never withheld
- */
 export const IntentSchema = z.discriminatedUnion("kind", [
   z.object({
     ...IntentBase,
     kind: z.literal("explain"),
     conceptId: ConceptIdSchema,
+  }),
+  z.object({
+    ...IntentBase,
+    kind: z.literal("demonstrate"),
+    conceptId: ConceptIdSchema,
+    subject: z.string().min(1),
   }),
   z.object({
     ...IntentBase,

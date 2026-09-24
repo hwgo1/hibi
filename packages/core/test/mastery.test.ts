@@ -2,11 +2,12 @@ import { describe, expect, test } from "bun:test";
 
 import type { ConceptId, ConceptRegistry } from "../src/concepts";
 import { seedRegistry } from "../src/concepts";
+import type { SessionId, UserId } from "../src/ids";
 import { computeMastery } from "../src/policy/mastery";
 import type { EvidenceEvent } from "../src/schemas/evidence";
-import type { SessionId, UserId } from "../src/ids";
 
 const NOW = new Date("2026-01-01T00:00:00.000Z");
+const GOROUTINES = "goroutines" as ConceptId;
 
 function registryWithGoroutines(): ConceptRegistry {
   const base = seedRegistry(NOW);
@@ -15,7 +16,7 @@ function registryWithGoroutines(): ConceptRegistry {
     concepts: [
       ...base.concepts,
       {
-        id: "goroutines" as ConceptId,
+        id: GOROUTINES,
         canonicalName: "goroutines",
         aliases: [],
         parentId: "concurrency" as ConceptId,
@@ -29,34 +30,40 @@ function registryWithGoroutines(): ConceptRegistry {
 
 function event(overrides: Partial<EvidenceEvent> = {}): EvidenceEvent {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     id: "ev" as EvidenceEvent["id"],
     at: NOW.toISOString(),
     userId: "local" as UserId,
     sessionId: "s1" as SessionId,
     turnIndex: 0,
     kind: "attempt_submitted",
-    conceptId: "goroutines" as ConceptId,
+    conceptId: GOROUTINES,
+    provenance: "execution",
     confidence: 1,
     outcome: "pass",
     ...overrides,
   };
 }
 
+function entryFor(entries: ReturnType<typeof computeMastery>, id: ConceptId) {
+  return entries.find((entry) => entry.conceptId === id);
+}
+
 describe("computeMastery", () => {
   test("credits the concept and rolls up to its ancestors", () => {
-    const entries = computeMastery(registryWithGoroutines(), [event()], NOW);
-    const ids = entries.map((e) => e.conceptId);
+    const ids = computeMastery(registryWithGoroutines(), [event()], NOW).map(
+      (e) => e.conceptId,
+    );
 
-    expect(ids).toContain("goroutines" as ConceptId);
+    expect(ids).toContain(GOROUTINES);
     expect(ids).toContain("concurrency" as ConceptId);
     expect(ids).toContain("programming-fundamentals" as ConceptId);
   });
 
   test("a parent gains rolled-up evidence, not direct", () => {
-    const entries = computeMastery(registryWithGoroutines(), [event()], NOW);
-    const parent = entries.find(
-      (e) => e.conceptId === ("concurrency" as ConceptId),
+    const parent = entryFor(
+      computeMastery(registryWithGoroutines(), [event()], NOW),
+      "concurrency" as ConceptId,
     );
 
     expect(parent?.directEvidenceCount).toBe(0);
@@ -64,52 +71,94 @@ describe("computeMastery", () => {
   });
 
   test("confidence rises with more evidence", () => {
-    const one = computeMastery(registryWithGoroutines(), [event()], NOW);
-    const many = computeMastery(
-      registryWithGoroutines(),
-      Array.from({ length: 6 }, () => event()),
-      NOW,
-    );
+    const one = entryFor(
+      computeMastery(registryWithGoroutines(), [event()], NOW),
+      GOROUTINES,
+    )!;
+    const many = entryFor(
+      computeMastery(
+        registryWithGoroutines(),
+        Array.from({ length: 6 }, () => event()),
+        NOW,
+      ),
+      GOROUTINES,
+    )!;
 
-    const a = one.find((e) => e.conceptId === ("goroutines" as ConceptId))!;
-    const b = many.find((e) => e.conceptId === ("goroutines" as ConceptId))!;
-    expect(b.confidence).toBeGreaterThan(a.confidence);
+    expect(many.confidence).toBeGreaterThan(one.confidence);
+  });
+
+  test("a model-judged pass carries less confidence than an executed one", () => {
+    const judged = entryFor(
+      computeMastery(
+        registryWithGoroutines(),
+        [event({ provenance: "model_judged" })],
+        NOW,
+      ),
+      GOROUTINES,
+    )!;
+    const executed = entryFor(
+      computeMastery(
+        registryWithGoroutines(),
+        [event({ provenance: "execution" })],
+        NOW,
+      ),
+      GOROUTINES,
+    )!;
+
+    expect(judged.confidence).toBeLessThan(executed.confidence);
+  });
+
+  test("a self-assessment counts, with self-declared weight", () => {
+    const claimed = entryFor(
+      computeMastery(
+        registryWithGoroutines(),
+        [event({ kind: "self_assessment", provenance: "self_declared" })],
+        NOW,
+      ),
+      GOROUTINES,
+    )!;
+    const executed = entryFor(
+      computeMastery(registryWithGoroutines(), [event()], NOW),
+      GOROUTINES,
+    )!;
+
+    expect(claimed.confidence).toBeLessThan(executed.confidence);
   });
 
   test("solving at step 3 credits less than solving unaided", () => {
-    const unaided = computeMastery(
-      registryWithGoroutines(),
-      [event({ helpDepth: 1 })],
-      NOW,
-    );
-    const shown = computeMastery(
-      registryWithGoroutines(),
-      [event({ helpDepth: 3 })],
-      NOW,
-    );
+    const unaided = entryFor(
+      computeMastery(registryWithGoroutines(), [event({ helpDepth: 1 })], NOW),
+      GOROUTINES,
+    )!;
+    const shown = entryFor(
+      computeMastery(registryWithGoroutines(), [event({ helpDepth: 3 })], NOW),
+      GOROUTINES,
+    )!;
 
-    const a = unaided.find((e) => e.conceptId === ("goroutines" as ConceptId))!;
-    const b = shown.find((e) => e.conceptId === ("goroutines" as ConceptId))!;
-    expect(b.level).toBeLessThan(a.level);
+    expect(shown.level).toBeLessThan(unaided.level);
   });
 
-  test("low-confidence evidence barely moves confidence", () => {
+  test("system events produce no mastery", () => {
     const entries = computeMastery(
       registryWithGoroutines(),
-      [event({ kind: "external_code_detected", confidence: 0.1 })],
-      NOW,
-    );
-    expect(
-      entries.find((e) => e.conceptId === ("goroutines" as ConceptId)),
-    ).toBeUndefined();
-  });
-
-  test("explanations alone produce no mastery", () => {
-    const entries = computeMastery(
-      registryWithGoroutines(),
-      [event({ kind: "concept_explained", outcome: "n/a" })],
+      [event({ kind: "hint_given", provenance: "system", outcome: "n/a" })],
       NOW,
     );
     expect(entries).toHaveLength(0);
+  });
+
+  test("detected external code is never credited", () => {
+    const entries = computeMastery(
+      registryWithGoroutines(),
+      [
+        event({
+          kind: "external_code_detected",
+          provenance: "behavioral",
+          confidence: 0.1,
+        }),
+      ],
+      NOW,
+    );
+    expect(entryFor(entries, GOROUTINES)).toBeUndefined();
   });
 });

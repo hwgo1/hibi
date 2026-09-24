@@ -1,6 +1,4 @@
 import { createHash } from "node:crypto";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
 import {
   appendFile,
   mkdir,
@@ -11,13 +9,15 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 
 import type { ConceptRegistry } from "../concepts";
 import { ConceptRegistrySchema } from "../concepts";
 import type { SessionId, UserId } from "../ids";
 import type { EvidenceQuery, Storage } from "../ports/storage";
 import type { EvidenceEvent } from "../schemas/evidence";
-import { EvidenceEventSchema } from "../schemas/evidence";
+import { parseEvidenceLine } from "../schemas/evidence";
 import type { LearnerModel } from "../schemas/learner";
 import { LearnerModelSchema } from "../schemas/learner";
 import type { RepoModel } from "../schemas/repo";
@@ -26,11 +26,11 @@ import type { SessionState } from "../schemas/session";
 import { SessionStateSchema } from "../schemas/session";
 
 /**
- * File system layout under the hibi home directory.
+ * Filesystem layout under the hibi home directory.
  *
- * Learner model, concept registry and evidence are per use and shared by every repository,
- * so knowledge carrie across projects. Session and repo model are per repository,
- * keyed by a hash of its absolute path
+ * Learner model, concept registry and evidence are per user and shared by
+ * every repository, so knowledge carries across projects. Session and repo
+ * model are per repository, keyed by a hash of its absolute path.
  */
 const LAYOUT = {
   profile: "profile.json",
@@ -39,14 +39,17 @@ const LAYOUT = {
   repos: "repos",
 } as const;
 
+const LOCK_TIMEOUT_MS = 10_000;
+const LOCK_RETRY_MS = 50;
+
 function repoKey(repoRoot: string): string {
   return createHash("sha256").update(repoRoot).digest("hex").slice(0, 16);
 }
 
 /**
- * Writes through a temporary file and renames into place. `rename` is atomic on POSIX and on Windows
- * within the same volume, so a reader sees either the complete previous file r the complete new one.
- * A plain write can be cut mid-flush and leave truncated JSON, which fails to parse and cannot be recovered.
+ * Writes through a temporary file and renames into place. `rename` is atomic
+ * within a volume, so a reader sees either the complete previous file or the
+ * complete new one, never truncated JSON.
  */
 async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
@@ -61,17 +64,10 @@ async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
 }
 
 /**
- * Advisory lock over a lockfile, guarding read-modify-write cycles on the
- * per-user files that two daemons in different repositories share. Evidence
- * needs no lock: single-line appends do not interleave.
- *
- * `wx` fails when the file already exists, which makes creation the atomic
- * test-and-set. A stale lock left by a crashed process is broken after the
- * timeout rather than deadlocking
+ * Advisory lock guarding read-modify-write cycles on per-user files that
+ * daemons in different repositories share. `wx` makes creation an atomic
+ * test-and-set; a lock left by a crashed process is broken after the timeout.
  */
-const LOCK_TIMEOUT_MS = 10_000;
-const LOCK_RETRY_MS = 50;
-
 async function withLock<T>(lockPath: string, fn: () => Promise<T>): Promise<T> {
   await mkdir(dirname(lockPath), { recursive: true });
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
@@ -87,7 +83,7 @@ async function withLock<T>(lockPath: string, fn: () => Promise<T>): Promise<T> {
         await rm(lockPath, { force: true });
         continue;
       }
-      await new Promise((r) => setTimeout(r, LOCK_RETRY_MS));
+      await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_MS));
     }
   }
 
@@ -108,14 +104,12 @@ async function readJson<T>(
   parse: (raw: unknown) => T,
 ): Promise<T | null> {
   let text: string;
-
   try {
-    text = await readFile(path, "utf-8");
+    text = await readFile(path, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
   }
-
   return parse(JSON.parse(text));
 }
 
@@ -136,6 +130,10 @@ export class StorageLocal implements Storage {
 
   private repoDir(repoRoot: string): string {
     return join(this.home, LAYOUT.repos, repoKey(repoRoot));
+  }
+
+  private sessionIndexPath(): string {
+    return join(this.home, LAYOUT.repos, "index.json");
   }
 
   async loadLearnerModel(_userId: UserId): Promise<LearnerModel | null> {
@@ -173,8 +171,10 @@ export class StorageLocal implements Storage {
   }
 
   async saveSession(state: SessionState): Promise<void> {
-    const dir = this.repoDir(state.repoRoot);
-    await writeJsonAtomic(join(dir, "session.json"), state);
+    await writeJsonAtomic(
+      join(this.repoDir(state.repoRoot), "session.json"),
+      state,
+    );
     await this.indexSession(state.sessionId, state.repoRoot);
   }
 
@@ -191,15 +191,50 @@ export class StorageLocal implements Storage {
     );
   }
 
-  private sessionIndexPath(): string {
-    return join(this.home, LAYOUT.repos, "index.json");
+  async appendEvidence(event: EvidenceEvent): Promise<void> {
+    await mkdir(this.home, { recursive: true });
+    await appendFile(this.evidencePath(), `${JSON.stringify(event)}\n`, "utf8");
+  }
+
+  async queryEvidence(query: EvidenceQuery): Promise<EvidenceEvent[]> {
+    let text: string;
+    try {
+      text = await readFile(this.evidencePath(), "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+
+    const events: EvidenceEvent[] = [];
+
+    for (const line of text.split("\n")) {
+      if (line.trim().length === 0) continue;
+
+      let raw: unknown;
+      try {
+        raw = JSON.parse(line);
+      } catch {
+        continue;
+      }
+
+      const event = parseEvidenceLine(raw);
+      if (event === null) continue;
+      if (event.userId !== query.userId) continue;
+      if (query.conceptId !== undefined && event.conceptId !== query.conceptId)
+        continue;
+      if (query.since !== undefined && event.at < query.since) continue;
+      events.push(event);
+    }
+
+    events.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+    return query.limit === undefined ? events : events.slice(-query.limit);
   }
 
   /** Maps session id to repo root, since sessions are stored under the repo */
   private async readSessionIndex(): Promise<Record<string, string>> {
     const raw = await readJson(
       this.sessionIndexPath(),
-      (v) => v as Record<string, string>,
+      (value) => value as Record<string, string>,
     );
     return raw ?? {};
   }
@@ -213,42 +248,5 @@ export class StorageLocal implements Storage {
       index[sessionId] = repoRoot;
       await writeJsonAtomic(this.sessionIndexPath(), index);
     });
-  }
-
-  /** Single-line append */
-  async appendEvidence(event: EvidenceEvent): Promise<void> {
-    await mkdir(this.home, { recursive: true });
-    await appendFile(
-      this.evidencePath(),
-      `${JSON.stringify(event)}\n`,
-      "utf-8",
-    );
-  }
-
-  /** Reads the whole log and filters in memory. Acceptable while the log is small */
-  async queryEvidence(query: EvidenceQuery): Promise<EvidenceEvent[]> {
-    let text: string;
-    try {
-      text = await readFile(this.evidencePath(), "utf-8");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-      throw error;
-    }
-
-    const events: EvidenceEvent[] = [];
-    for (const line of text.split("\n")) {
-      if (line.trim().length === 0) continue;
-      const parsed = EvidenceEventSchema.safeParse(JSON.parse(line));
-      if (!parsed.success) continue;
-      const event = parsed.data;
-      if (event.userId !== query.userId) continue;
-      if (query.conceptId !== undefined && event.conceptId !== query.conceptId)
-        continue;
-      if (query.since !== undefined && event.at < query.since) continue;
-      events.push(event);
-    }
-
-    events.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
-    return query.limit === undefined ? events : events.slice(-query.limit);
   }
 }

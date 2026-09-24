@@ -7,9 +7,7 @@ export type ConceptId = z.infer<typeof ConceptIdSchema>;
 export const ConceptSourceSchema = z.enum(["seed", "proposed"]);
 export type ConceptSource = z.infer<typeof ConceptSourceSchema>;
 
-/** Maximum depth from a root. Keeps the tree wide and shallow
- * so evidence aggregates into meaningful parents
- */
+/** Maximum depth from a root. Keeps the tree wide so evidence aggregates into meaningful parents */
 export const MAX_CONCEPT_DEPTH = 4;
 
 export const ConceptSchema = z.object({
@@ -17,6 +15,7 @@ export const ConceptSchema = z.object({
   canonicalName: z.string().min(1),
   aliases: z.array(z.string().min(1)).default([]),
   parentId: ConceptIdSchema.nullable().default(null),
+  requires: z.array(ConceptIdSchema).optional(),
   source: ConceptSourceSchema,
   createdAt: IsoDateTimeSchema,
   mergedInto: ConceptIdSchema.nullable().default(null),
@@ -35,9 +34,8 @@ export const ConceptRegistrySchema = z.object({
 export type ConceptRegistry = z.infer<typeof ConceptRegistrySchema>;
 
 /**
- * Broad roots shipped with hibi. They exist to give proposed concepts a
- * parent so narrow topics still accumulate evidence at a useful level.
- * They are not meant to cover what a learner will study.
+ * Broad roots shipped with hibi. They exist to give proposed concepts a parent
+ * so narrow topics still accumulate evidence at a useful level
  */
 export const SEED_CONCEPTS: ReadonlyArray<{
   id: string;

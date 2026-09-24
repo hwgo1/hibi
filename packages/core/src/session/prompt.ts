@@ -1,9 +1,9 @@
 import type { Concept, ConceptRegistry } from "../concepts";
-import type { RepoModel } from "../schemas/repo";
+import type { Workspace } from "../ports/workspace";
 import type { LearnerModel, MasteryEntry } from "../schemas/learner";
+import type { RepoModel } from "../schemas/repo";
 import type { Intent, SessionState } from "../schemas/session";
 import { STALE_INTENT_THRESHOLD_MS } from "../schemas/session";
-import type { Workspace } from "../ports/workspace";
 import { TUTOR_RULES } from "./rules";
 
 /** Caps keeping the prompt bounded regardless of how much history exists. */
@@ -34,7 +34,7 @@ export async function buildSystemPrompt(input: PromptInput): Promise<string> {
     renderRepo(input.repo),
     await renderContextFiles(input.session, input.workspace),
   ];
-  return sections.filter((s) => s.length > 0).join("\n\n");
+  return sections.filter((section) => section.length > 0).join("\n\n");
 }
 
 /**
@@ -44,14 +44,16 @@ export async function buildSystemPrompt(input: PromptInput): Promise<string> {
  */
 function renderLearner(learner: LearnerModel): string {
   const p = learner.preferences;
-  const lines = [
-    `<learner>`,
+  const lines = [`<learner>`];
+
+  if (p.name.length > 0) lines.push(`name: ${p.name}`);
+  lines.push(
     `language: ${p.language}`,
     `theory depth: ${p.theoryDepth}`,
     `exercise size: ${p.exerciseSize}`,
     `unsolicited hints: ${p.unsolicitedHints}`,
     `explanation style: ${p.explanationStyle}`,
-  ];
+  );
 
   const mastery = topMastery(learner.mastery);
   if (mastery.length > 0) {
@@ -67,6 +69,7 @@ function renderLearner(learner: LearnerModel): string {
     .slice()
     .sort((a, b) => b.occurrences - a.occurrences)
     .slice(0, LIMITS.recurringErrors);
+
   if (errors.length > 0) {
     lines.push(`recurring mistakes:`);
     for (const error of errors) {
@@ -77,8 +80,10 @@ function renderLearner(learner: LearnerModel): string {
   }
 
   const signals = learner.inferredSignals.filter(
-    (s) => s.confidence >= 0.5 && !contradictsDeclared(s.key, learner),
+    (signal) =>
+      signal.confidence >= 0.5 && !contradictsDeclared(signal.key, learner),
   );
+
   if (signals.length > 0) {
     lines.push(`observed tendencies (advisory):`);
     for (const signal of signals) {
@@ -103,9 +108,8 @@ function topMastery(entries: MasteryEntry[]): MasteryEntry[] {
 }
 
 /**
- * Lists the vocabulary the user has built. This is what keeps the model
- * reusing an existing term instead of coining a variant the resolver would
- * have to reconcile later
+ * Lists the vocabulary the user has built, which keeps the model reusing an
+ * existing term instead of coining a variant the resolver must reconcile
  */
 function renderConcepts(
   registry: ConceptRegistry,
@@ -132,11 +136,15 @@ function rank(concept: Concept, known: Set<string>): number {
   return score;
 }
 
+/**
+ * The session is what makes a reference like "this" resolvable and what
+ * carries the ladder across turns
+ */
 function renderSession(session: SessionState, now: Date): string {
   const lines = [`<session>`, `turn: ${session.turnCount}`];
 
   const intents = session.intents
-    .filter((i) => i.status === "active" || i.status === "stale")
+    .filter((intent) => intent.status === "active" || intent.status === "stale")
     .slice(-LIMITS.intents);
 
   if (intents.length > 0) {
@@ -147,8 +155,9 @@ function renderSession(session: SessionState, now: Date): string {
   }
 
   const findings = session.findings
-    .filter((f) => f.status !== "resolved")
+    .filter((finding) => finding.status !== "resolved")
     .slice(0, LIMITS.findings);
+
   if (findings.length > 0) {
     lines.push(`open findings:`);
     for (const finding of findings) {
@@ -179,6 +188,9 @@ function describeIntent(
 
   if (intent.kind === "explain") {
     return `${marker}${intent.id} explain ${intent.conceptId}${stale}`;
+  }
+  if (intent.kind === "demonstrate") {
+    return `${marker}${intent.id} demonstrated ${intent.conceptId}: ${intent.subject}${stale}`;
   }
   if (intent.kind === "exercise") {
     return `${marker}${intent.id} exercise ${intent.conceptId}: ${intent.statement}${stale}`;
@@ -222,9 +234,8 @@ function renderRepo(repo: RepoModel | null): string {
 }
 
 /**
- * Files pinned to the session, truncated to a fixed budget. A file that
- * cannot be read is reported rather than silently omitted, since a missing
- * file changes what the tutor should say.
+ * Files pinned to the session, truncated to a fixed budget. A file that cannot
+ * be read is reported, since a missing file changes what hibi should say
  */
 async function renderContextFiles(
   session: SessionState,

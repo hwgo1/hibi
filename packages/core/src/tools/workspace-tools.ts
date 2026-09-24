@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import type { Intent } from "../schemas/session";
 import type { ToolContext } from "./context";
 import type { Tool } from "./registry";
 
@@ -26,7 +27,7 @@ export const listFiles: Tool<ToolContext> = {
       limit: LIST_LIMIT,
     });
     const lines = result.entries
-      .map((e) => `${e.path} (${e.bytes}b)`)
+      .map((entry) => `${entry.path} (${entry.bytes}b)`)
       .join("\n");
     return {
       content: result.truncated
@@ -64,22 +65,32 @@ export const readFile: Tool<ToolContext> = {
 const RecordArgs = z.object({
   intentId: z.string().min(1),
   outcome: z.enum(["pass", "fail", "partial"]),
+  filePath: z.string().min(1).optional(),
   note: z.string().optional(),
 });
 
-/**
- * Records the result of an attempt. Credit is discounted by the hint depth reached, so solving
- * after being shown the correction is worth less than solving unaided
- */
+function attemptFile(
+  intent: Intent,
+  explicit: string | undefined,
+): string | undefined {
+  if (explicit !== undefined) return explicit;
+  return intent.kind === "exercise" ? intent.targetFile : undefined;
+}
+
 export const recordAttempt: Tool<ToolContext> = {
   definition: {
     name: "record_attempt",
-    description: "Record how the user's attempt turned out.",
+    description:
+      "Record how the user's own attempt at an exercise turned out. Never use it for environment or setup problems such as a missing compiler, an installation error or a wrong PATH.",
     parameters: {
       type: "object",
       properties: {
         intentId: { type: "string" },
         outcome: { type: "string", enum: ["pass", "fail", "partial"] },
+        filePath: {
+          type: "string",
+          description: "Repo-relative file containing the attempt.",
+        },
         note: { type: "string" },
       },
       required: ["intentId", "outcome"],
@@ -104,6 +115,7 @@ export const recordAttempt: Tool<ToolContext> = {
         i.target.type === "exercise" &&
         i.target.intentId === args.intentId,
     );
+
     if (resolveIntent?.kind === "resolve") {
       resolveIntent.attempts += 1;
       resolveIntent.lastTouchedAt = at;
@@ -113,10 +125,11 @@ export const recordAttempt: Tool<ToolContext> = {
     context.pendingEvidence.push({
       kind: "attempt_submitted",
       conceptId: intent.conceptId,
-      confidence: 0.8,
+      provenance: "model_judged",
       outcome: args.outcome,
       helpDepth:
         resolveIntent?.kind === "resolve" ? resolveIntent.step : undefined,
+      filePath: attemptFile(intent, args.filePath),
       note: args.note,
     });
 

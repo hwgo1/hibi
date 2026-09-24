@@ -1,8 +1,9 @@
-import type { ConceptRegistry } from "../concepts";
+import type { ConceptId, ConceptRegistry } from "../concepts";
 import type { Clock, Storage } from "../ports/storage";
 import type { Workspace } from "../ports/workspace";
+import type { EvidenceKind, Provenance } from "../schemas/evidence";
 import type { LearnerModel } from "../schemas/learner";
-import type { SessionState } from "../schemas/session";
+import type { HintStep, SessionState } from "../schemas/session";
 
 /**
  * Mutable state a turn operates on. Tools read and replace these fields; the daemon persists
@@ -20,11 +21,14 @@ export interface ToolContext {
 }
 
 export interface PendingEvidence {
-  kind: string;
-  conceptId: string;
-  confidence: number;
+  kind: EvidenceKind;
+  conceptId: ConceptId;
+  provenance: Provenance;
+  confidence?: number;
   outcome?: "pass" | "fail" | "partial" | "n/a";
-  helpDepth?: 1 | 2 | 3;
+  helpDepth?: HintStep;
+  selfConfidence?: number;
+  predicted?: "pass" | "fail";
   filePath?: string;
   note?: string;
 }

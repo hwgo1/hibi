@@ -30,6 +30,7 @@ const AUTOSTART_TIMEOUT_MS = 8000;
 const AUTOSTART_POLL_MS = 100;
 
 const PREFERENCE_KEYS = [
+  "name",
   "language",
   "theoryDepth",
   "exerciseSize",
@@ -129,10 +130,10 @@ async function chat(repoRoot: string): Promise<void> {
 
   let spend: SessionSpend = emptySpend();
   let showRaw = false;
+  let streaming = false;
 
   const typewriter = new Typewriter((text) => stdout.write(text));
   const spinner = new Spinner((text) => stdout.write(text));
-  let streaming = false;
 
   client.onEvent((event) => {
     if (event.type === "text") {
@@ -253,16 +254,20 @@ async function handlePrefs(
   client: DaemonClient,
   storage: StorageLocal,
 ): Promise<void> {
-  const [, key, value] = input.split(/\s+/);
+  const [, key, ...rest] = input.split(/\s+/);
+  const value = rest.join(" ").trim();
 
-  if (key === undefined || value === undefined) {
+  if (key === undefined || value.length === 0) {
     const learner = await storage.loadLearnerModel(LOCAL_USER);
     if (learner === null) {
       stdout.write(ui.dim("no profile yet\n"));
       return;
     }
     for (const name of PREFERENCE_KEYS) {
-      stdout.write(`  ${name} = ${learner.preferences[name]}\n`);
+      const current = learner.preferences[name];
+      stdout.write(
+        `  ${name} = ${current === "" ? ui.dim("(unset)") : current}\n`,
+      );
     }
     stdout.write(ui.dim("  change with: /prefs <key> <value>\n"));
     return;

@@ -48,6 +48,17 @@ function touch(context: ToolContext): string {
   return context.clock.now().toISOString();
 }
 
+const CONCEPT_TERM_SCHEMA = {
+  type: "string",
+  description:
+    "The topic in English, at most four words. Never a question or a sentence.",
+} as const;
+
+const PARENT_TERM_SCHEMA = {
+  type: "string",
+  description: "A broader concept that already exists in the registry.",
+} as const;
+
 const ExplainArgs = z.object({
   conceptTerm: z.string().min(1),
   parentTerm: z.string().min(1).optional(),
@@ -61,15 +72,8 @@ export const explainConcept: Tool<ToolContext> = {
     parameters: {
       type: "object",
       properties: {
-        conceptTerm: {
-          type: "string",
-          description:
-            "The topic in English, at most four words. Never a question or a sentence.",
-        },
-        parentTerm: {
-          type: "string",
-          description: "A broader concept that already exists in the registry.",
-        },
+        conceptTerm: CONCEPT_TERM_SCHEMA,
+        parentTerm: PARENT_TERM_SCHEMA,
       },
       required: ["conceptTerm", "parentTerm"],
     },
@@ -106,13 +110,95 @@ export const explainConcept: Tool<ToolContext> = {
     context.pendingEvidence.push({
       kind: "concept_explained",
       conceptId: outcome.concept.id,
-      confidence: 0.2,
-      outcome: "n/a",
+      provenance: "system",
     });
 
     const depth = context.learner.preferences.theoryDepth;
     return {
       content: `Concept: ${outcome.concept.canonicalName}. Explain it at ${depth} depth, in the user's language. No ladder applies here.`,
+    };
+  },
+};
+
+const DemonstrateArgs = z.object({
+  conceptTerm: z.string().min(1),
+  parentTerm: z.string().min(1).optional(),
+  subject: z.string().min(1),
+});
+
+/**
+ * Exposition with complete code, for material that is convention rather than
+ * reasoning: configuration syntax, an unfamiliar API or a build file
+ */
+export const demonstrateCode: Tool<ToolContext> = {
+  definition: {
+    name: "demonstrate_code",
+    description:
+      "Show complete, working code for something the user could only know by being told: syntax, configuration, conventions, an API they have not used. Never for the solution to an exercise or an attempt in progress.",
+    parameters: {
+      type: "object",
+      properties: {
+        conceptTerm: CONCEPT_TERM_SCHEMA,
+        parentTerm: PARENT_TERM_SCHEMA,
+        subject: {
+          type: "string",
+          description: "What is being shown, in a few words.",
+        },
+      },
+      required: ["conceptTerm", "parentTerm", "subject"],
+    },
+  },
+
+  async execute(rawArgs, context) {
+    const args = DemonstrateArgs.parse(rawArgs);
+    const outcome = resolve(context, args.conceptTerm, args.parentTerm);
+
+    if (outcome.status === "rejected") {
+      return { content: `Not a concept: ${outcome.reason}`, isError: true };
+    }
+    if (outcome.status === "ambiguous") {
+      return { content: "Ambiguous concept. Ask the user which one." };
+    }
+
+    const conceptId = outcome.concept.id;
+    const exerciseOpen = context.session.intents.some(
+      (intent) =>
+        intent.status === "active" &&
+        (intent.kind === "exercise" || intent.kind === "resolve") &&
+        intent.conceptId === conceptId,
+    );
+
+    if (exerciseOpen) {
+      return {
+        content:
+          "An exercise on this concept is open. Do not show its solution; use give_hint for the user's attempt.",
+        isError: true,
+      };
+    }
+
+    const at = touch(context);
+    const id = newId("int") as IntentId;
+
+    context.session.intents.push({
+      id,
+      kind: "demonstrate",
+      conceptId,
+      subject: args.subject,
+      createdAt: at,
+      lastTouchedAt: at,
+      status: "active",
+    });
+    context.session.activeIntentId = id;
+
+    context.pendingEvidence.push({
+      kind: "code_demonstrated",
+      conceptId,
+      provenance: "system",
+      note: args.subject,
+    });
+
+    return {
+      content: `Show complete, working code for: ${args.subject}. Explain each part in the user's language. No ladder applies here.`,
     };
   },
 };
@@ -132,20 +218,17 @@ export const proposeExercise: Tool<ToolContext> = {
     parameters: {
       type: "object",
       properties: {
-        conceptTerm: {
-          type: "string",
-          description:
-            "The topic in English, at most four words. Never a question or a sentence.",
-        },
-        parentTerm: {
-          type: "string",
-          description: "A broader concept that already exists in the registry.",
-        },
+        conceptTerm: CONCEPT_TERM_SCHEMA,
+        parentTerm: PARENT_TERM_SCHEMA,
         statement: {
           type: "string",
           description: "The task, in the user's language.",
         },
-        targetFile: { type: "string" },
+        targetFile: {
+          type: "string",
+          description:
+            "Repo-relative file where the user will write the solution.",
+        },
       },
       required: ["conceptTerm", "parentTerm", "statement"],
     },
@@ -180,8 +263,8 @@ export const proposeExercise: Tool<ToolContext> = {
     context.pendingEvidence.push({
       kind: "exercise_proposed",
       conceptId: outcome.concept.id,
-      confidence: 0.1,
-      outcome: "n/a",
+      provenance: "system",
+      filePath: args.targetFile,
     });
 
     return {
@@ -195,11 +278,6 @@ const HintArgs = z.object({
   userRequestedFullAnswer: z.boolean().optional(),
 });
 
-/**
- * The governed path. Note the absence of a depth argument: the step is
- * derived from session state, so the model cannot ask for a deeper hint and
- * there is no refusal to negotiate.
- */
 export const giveHint: Tool<ToolContext> = {
   definition: {
     name: "give_hint",
@@ -285,8 +363,7 @@ export const giveHint: Tool<ToolContext> = {
     context.pendingEvidence.push({
       kind: "hint_given",
       conceptId: resolveIntent.conceptId,
-      confidence: 0.3,
-      outcome: "n/a",
+      provenance: "system",
       helpDepth: step,
     });
 

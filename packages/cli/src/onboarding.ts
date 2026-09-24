@@ -18,6 +18,7 @@ import { MODEL_CHOICES, PROVIDER_KEY_URLS, verifyCredentials } from "./models";
 import { ui } from "./render";
 
 const LOCAL_USER = "local" as UserId;
+const MAX_NAME_LENGTH = 40;
 
 export function detectLanguage(): string {
   const fromEnv = process.env["LANG"] ?? process.env["LC_ALL"];
@@ -93,15 +94,19 @@ async function askModel(rl: Interface, provider: ProviderId): Promise<string> {
 
 async function setupProfile(rl: Interface, home: string): Promise<void> {
   const storage = new StorageLocal(home);
-  const existing = await storage.loadLearnerModel(LOCAL_USER);
-  if (existing !== null) return;
+  if ((await storage.loadLearnerModel(LOCAL_USER)) !== null) return;
 
   const detected = detectLanguage();
   process.stdout.write(`${ui.bold("language")}\n`);
-  const answer = (
+  const language = (
     await rl.question(
       `  detected ${detected} — press enter to keep, or type another: `,
     )
+  ).trim();
+
+  process.stdout.write(`\n${ui.bold("name")}\n`);
+  const name = (
+    await rl.question("  what should I call you? (enter to skip): ")
   ).trim();
 
   const at = systemClock.now().toISOString();
@@ -112,7 +117,8 @@ async function setupProfile(rl: Interface, home: string): Promise<void> {
     updatedAt: at,
     preferences: {
       ...DEFAULT_TEACHING_PREFERENCES,
-      language: answer.length > 0 ? answer : detected,
+      language: language.length > 0 ? language : detected,
+      name: name.slice(0, MAX_NAME_LENGTH),
     },
     mastery: [],
     recurringErrors: [],

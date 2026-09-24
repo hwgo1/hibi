@@ -1,6 +1,7 @@
 import type { ConceptId, ConceptRegistry } from "../concepts";
 import { ancestors, canonical } from "../concept-resolver";
 import type { EvidenceEvent } from "../schemas/evidence";
+import { evidenceWeight } from "../schemas/evidence";
 import type { MasteryEntry } from "../schemas/learner";
 import { MASTERY_FORMULA_VERSION } from "../schemas/learner";
 import { creditMultiplier } from "./hint-ladder";
@@ -55,18 +56,25 @@ export function computeMastery(
   };
 
   for (const event of events) {
-    const outcomeScore = scoreOf(event);
-    if (outcomeScore === null) continue;
+    const weight = evidenceWeight(event);
+    if (weight === 0) continue;
+
+    const score = scoreOf(event);
+    if (score === null) continue;
 
     const target = canonical(registry, event.conceptId);
     if (target === null) continue;
 
-    credit(target.id, outcomeScore, event.confidence, event.at, true);
+    credit(target.id, score, weight, event.at, true);
 
-    const chain = ancestors(registry, target.id);
-    for (const [index, ancestor] of chain.entries()) {
-      const decayed = event.confidence * ROLLUP_DECAY ** (index + 1);
-      credit(ancestor.id, outcomeScore, decayed, event.at, false);
+    for (const [index, ancestor] of ancestors(registry, target.id).entries()) {
+      credit(
+        ancestor.id,
+        score,
+        weight * ROLLUP_DECAY ** (index + 1),
+        event.at,
+        false,
+      );
     }
   }
 
@@ -95,12 +103,19 @@ export function computeMastery(
  * Events that say nothing about ability return null and are skipped
  */
 function scoreOf(event: EvidenceEvent): number | null {
-  if (event.kind === "concept_explained" || event.kind === "exercise_proposed")
+  if (
+    event.kind === "concept_explained" ||
+    event.kind === "code_demonstrated" ||
+    event.kind === "exercise_proposed" ||
+    event.kind === "external_code_detected"
+  ) {
     return null;
-  if (event.kind === "external_code_detected") return null;
+  }
 
-  const depth = event.helpDepth;
-  const multiplier = depth === undefined ? 1 : creditMultiplier(depth, false);
+  const multiplier =
+    event.helpDepth === undefined
+      ? 1
+      : creditMultiplier(event.helpDepth, false);
 
   switch (event.outcome) {
     case "pass":

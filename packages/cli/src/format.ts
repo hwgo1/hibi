@@ -19,6 +19,9 @@ export function formatState(session: SessionState): string {
   } else if (active.kind === "exercise") {
     lines.push(`exercise · ${active.conceptId}`);
     lines.push(ui.dim(`  ${active.statement}`));
+  } else if (active.kind === "demonstrate") {
+    lines.push(`showed · ${active.conceptId}`);
+    lines.push(ui.dim(`  ${active.subject}`));
   } else {
     lines.push(`explaining · ${active.conceptId}`);
   }
@@ -62,7 +65,7 @@ export function formatProfile(learner: LearnerModel): string {
   const lines = [ui.bold("preferences")];
 
   for (const [key, value] of Object.entries(learner.preferences)) {
-    lines.push(`  ${key} = ${value}`);
+    lines.push(`  ${key} = ${value === "" ? ui.dim("(unset)") : value}`);
   }
 
   if (learner.mastery.length === 0) {

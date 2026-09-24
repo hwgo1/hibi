@@ -11,7 +11,8 @@ import type {
 import type { Clock, Storage } from "../ports/storage";
 import type { Workspace } from "../ports/workspace";
 import { computeMastery } from "../policy/mastery";
-import type { EvidenceEvent, EvidenceKind } from "../schemas/evidence";
+import type { EvidenceEvent } from "../schemas/evidence";
+import { EVIDENCE_EVENT_SCHEMA_VERSION } from "../schemas/evidence";
 import type { LearnerModel } from "../schemas/learner";
 import { DEFAULT_TEACHING_PREFERENCES } from "../schemas/learner";
 import type { SessionState } from "../schemas/session";
@@ -147,10 +148,6 @@ export class TutorSession {
     await this.persist(context, now);
   }
 
-  /**
-   * Consumes one provider stream, forwarding text as it arrives and returning
-   * the turn summary once the stream ends
-   */
   private async *runCompletion(
     provider: LLMProvider,
     system: string,
@@ -230,17 +227,20 @@ export class TutorSession {
 
     for (const pending of context.pendingEvidence) {
       const event: EvidenceEvent = {
-        schemaVersion: 1,
+        schemaVersion: EVIDENCE_EVENT_SCHEMA_VERSION,
         id: `ev_${Math.random().toString(36).slice(2, 12)}` as EvidenceId,
         at,
         userId: context.session.userId,
         sessionId: context.session.sessionId,
         turnIndex: context.session.turnCount,
-        kind: pending.kind as EvidenceKind,
-        conceptId: pending.conceptId as EvidenceEvent["conceptId"],
-        confidence: pending.confidence,
+        kind: pending.kind,
+        conceptId: pending.conceptId,
+        provenance: pending.provenance,
+        confidence: pending.confidence ?? 1,
         outcome: pending.outcome ?? "n/a",
         helpDepth: pending.helpDepth,
+        selfConfidence: pending.selfConfidence,
+        predicted: pending.predicted,
         filePath: pending.filePath,
         note: pending.note,
       };
@@ -252,7 +252,9 @@ export class TutorSession {
 
     const changesMastery = context.pendingEvidence.some(
       (event) =>
-        event.kind === "attempt_submitted" || event.kind === "test_run",
+        event.kind === "attempt_submitted" ||
+        event.kind === "test_run" ||
+        event.kind === "self_assessment",
     );
     if (!changesMastery) return;
 

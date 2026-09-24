@@ -1,4 +1,5 @@
 import { z } from "zod";
+
 import { ConceptIdSchema } from "../concepts";
 import {
   IsoDateTimeSchema,
@@ -7,8 +8,12 @@ import {
   UserIdSchema,
 } from "../ids";
 
-/** Preferences the user set explicitly. These configure teaching style only */
+/**
+ * Settings the user declared explicitly. They configure how the tutor
+ * addresses and teaches the user
+ */
 export const TeachingPreferencesSchema = z.object({
+  name: z.string().max(40).default(""),
   language: z.string().min(2).default("pt-BR"),
   theoryDepth: z.enum(["minimal", "balanced", "thorough"]).default("balanced"),
   exerciseSize: z.enum(["small", "medium", "large"]).default("medium"),
@@ -23,7 +28,7 @@ export type TeachingPreferences = z.infer<typeof TeachingPreferencesSchema>;
 export const DEFAULT_TEACHING_PREFERENCES: TeachingPreferences =
   TeachingPreferencesSchema.parse({});
 
-export const MASTERY_FORMULA_VERSION = 1;
+export const MASTERY_FORMULA_VERSION = 2;
 
 export const MasteryEntrySchema = z.object({
   conceptId: ConceptIdSchema,
@@ -64,7 +69,7 @@ export const InferredSignalSchema = z.object({
   updatedAt: IsoDateTimeSchema,
 });
 
-export type InferredSignalSchema = z.infer<typeof InferredSignalSchema>;
+export type InferredSignal = z.infer<typeof InferredSignalSchema>;
 
 export const LEARNER_MODEL_SCHEMA_VERSION = 1;
 
