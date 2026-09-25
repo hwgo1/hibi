@@ -13,6 +13,7 @@ import { Daemon, findRepoRoot, socketPath } from "@hibi/daemon";
 import { DaemonClient } from "./client";
 import { HIBI_HOME, loadCredentials } from "./config";
 import { formatProfile, formatState } from "./format";
+import { catalogFor, type Catalog } from "./i18n";
 import { buildProvider } from "./models";
 import { runOnboarding } from "./onboarding";
 import {
@@ -58,8 +59,10 @@ async function runDaemon(repoRoot: string): Promise<void> {
   await new Promise(() => {});
 }
 
-/** Spawns a detached daemon and waits for its socket to appear */
-async function ensureDaemon(repoRoot: string): Promise<DaemonClient> {
+async function ensureDaemon(
+  repoRoot: string,
+  strings: Catalog,
+): Promise<DaemonClient> {
   const path = socketPath(repoRoot, HIBI_HOME);
 
   try {
@@ -67,7 +70,7 @@ async function ensureDaemon(repoRoot: string): Promise<DaemonClient> {
     await client.connect(path);
     return client;
   } catch {
-    stdout.write(ui.dim("starting daemon…\n"));
+    stdout.write(`${ui.dim(strings.starting)}\n`);
   }
 
   Bun.spawn(["bun", import.meta.path, "daemon"], {
@@ -92,16 +95,12 @@ async function ensureDaemon(repoRoot: string): Promise<DaemonClient> {
   }
 }
 
-function opening(repoRoot: string, indexed: boolean): string {
+function opening(strings: Catalog, repoRoot: string, indexed: boolean): string {
   const lines = [
-    ui.dim(`repo: ${repoRoot}`),
-    indexed
-      ? ""
-      : ui.dim(
-          "not indexed yet — I can still read your files, just slower to orient",
-        ),
+    ui.dim(`${strings.repoLabel}: ${repoRoot}`),
+    indexed ? "" : ui.dim(strings.notIndexed),
     "",
-    "Want an exercise, or would you rather I look at something you already wrote?",
+    strings.opening,
     "",
   ];
   return lines.filter((line) => line.length > 0).join("\n");
@@ -109,6 +108,7 @@ function opening(repoRoot: string, indexed: boolean): string {
 
 async function chat(repoRoot: string): Promise<void> {
   const rl = createInterface({ input: stdin, output: stdout });
+  rl.on("SIGINT", () => rl.close());
 
   let credentials = await loadCredentials();
   if (credentials === null) {
@@ -124,8 +124,11 @@ async function chat(repoRoot: string): Promise<void> {
     );
   }
 
-  const client = await ensureDaemon(repoRoot);
   const storage = new StorageLocal(HIBI_HOME);
+  const learner = await storage.loadLearnerModel(LOCAL_USER);
+  const strings = catalogFor(learner?.preferences.language ?? "en");
+
+  const client = await ensureDaemon(repoRoot, strings);
   const indexed = (await storage.loadRepoModel(repoRoot)) !== null;
 
   let spend: SessionSpend = emptySpend();
@@ -191,10 +194,18 @@ async function chat(repoRoot: string): Promise<void> {
   });
 
   stdout.write(`\n${banner(provider.model, repoRoot)}`);
-  stdout.write(`${opening(repoRoot, indexed)}\n`);
+  stdout.write(`${opening(strings, repoRoot, indexed)}\n`);
 
   for (;;) {
-    const text = (await rl.question(ui.prompt())).trim();
+    let line: string;
+    try {
+      line = await rl.question(ui.prompt());
+    } catch {
+      stdout.write("\n");
+      break;
+    }
+
+    const text = line.trim();
     if (text.length === 0) continue;
 
     if (text === "/exit") break;
@@ -214,7 +225,7 @@ async function chat(repoRoot: string): Promise<void> {
       continue;
     }
     if (text.startsWith("/prefs")) {
-      await handlePrefs(text, client, storage);
+      await handlePrefs(text, client, storage, strings);
       continue;
     }
     if (text === "/clear") {
@@ -253,6 +264,7 @@ async function handlePrefs(
   input: string,
   client: DaemonClient,
   storage: StorageLocal,
+  strings: Catalog,
 ): Promise<void> {
   const [, key, ...rest] = input.split(/\s+/);
   const value = rest.join(" ").trim();
@@ -260,7 +272,7 @@ async function handlePrefs(
   if (key === undefined || value.length === 0) {
     const learner = await storage.loadLearnerModel(LOCAL_USER);
     if (learner === null) {
-      stdout.write(ui.dim("no profile yet\n"));
+      stdout.write(ui.dim(`${strings.noProfile}\n`));
       return;
     }
     for (const name of PREFERENCE_KEYS) {
@@ -269,7 +281,7 @@ async function handlePrefs(
         `  ${name} = ${current === "" ? ui.dim("(unset)") : current}\n`,
       );
     }
-    stdout.write(ui.dim("  change with: /prefs <key> <value>\n"));
+    stdout.write(ui.dim(`  ${strings.changeWith}\n`));
     return;
   }
 
