@@ -5,6 +5,7 @@ import type { ToolContext } from "./context";
 import type { Tool } from "./registry";
 
 const LIST_LIMIT = 80;
+const MAX_CONTEXT_FILES = 3;
 
 const ListArgs = z.object({ subpath: z.string().optional() });
 
@@ -53,9 +54,13 @@ export const readFile: Tool<ToolContext> = {
   async execute(rawArgs, context) {
     const args = ReadArgs.parse(rawArgs);
     const file = await context.workspace.readFile(args.path);
-    if (!context.session.contextFiles.includes(file.path)) {
-      context.session.contextFiles.push(file.path);
-    }
+
+    const pinned = context.session.contextFiles.filter(
+      (path) => path !== file.path,
+    );
+    pinned.push(file.path);
+    context.session.contextFiles = pinned.slice(-MAX_CONTEXT_FILES);
+
     return {
       content: `${file.path}${file.dirty ? " (unsaved)" : ""}\n\n${file.text}`,
     };

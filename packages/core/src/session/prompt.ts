@@ -25,22 +25,33 @@ export interface PromptInput {
   now: Date;
 }
 
+/**
+ * Rebuilds the system prompt from persisted state on every turn. Nothing the
+ * tutor needs lives in the transcript, so the transcript can be truncated
+ * freely without losing the exercise, the ladder position or the history.
+ *
+ * Sections are ordered from most to least stable across turns. Providers bill
+ * a cached prefix at a fraction of the input rate, and the cache holds only up
+ * to the first byte that differs, so a volatile section placed early would
+ * invalidate everything after it. The session goes last for that reason, and
+ * carries no turn counter, which would change the prefix on every call.
+ */
 export async function buildSystemPrompt(input: PromptInput): Promise<string> {
   const sections = [
     TUTOR_RULES,
-    renderLearner(input.learner),
-    renderConcepts(input.registry, input.learner),
-    renderSession(input.session, input.now),
     renderRepo(input.repo),
+    renderConcepts(input.registry, input.learner),
+    renderLearner(input.learner),
     await renderContextFiles(input.session, input.workspace),
+    renderSession(input.session, input.now),
   ];
   return sections.filter((section) => section.length > 0).join("\n\n");
 }
 
 /**
  * Declared preferences win over inferred signals: a signal contradicting an
- * explicit setting is dropped rather than reconciled, so an inference the
- * user never confirmed cannot quietly change how they are taught
+ * explicit setting is dropped rather than reconciled, so an inference the user
+ * never confirmed cannot quietly change how they are taught.
  */
 function renderLearner(learner: LearnerModel): string {
   const p = learner.preferences;
@@ -99,7 +110,7 @@ function contradictsDeclared(key: string, learner: LearnerModel): boolean {
   return Object.keys(learner.preferences).includes(key);
 }
 
-/** Highest confidence first, so a crowded model still shows what is known best */
+/** Highest confidence first, so a crowded model still shows what is known best. */
 function topMastery(entries: MasteryEntry[]): MasteryEntry[] {
   return entries
     .slice()
@@ -109,7 +120,7 @@ function topMastery(entries: MasteryEntry[]): MasteryEntry[] {
 
 /**
  * Lists the vocabulary the user has built, which keeps the model reusing an
- * existing term instead of coining a variant the resolver must reconcile
+ * existing term instead of coining a variant the resolver must reconcile.
  */
 function renderConcepts(
   registry: ConceptRegistry,
@@ -138,10 +149,11 @@ function rank(concept: Concept, known: Set<string>): number {
 
 /**
  * The session is what makes a reference like "this" resolvable and what
- * carries the ladder across turns
+ * carries the ladder across turns. Stale intents are surfaced so the tutor can
+ * ask once whether they were finished or dropped.
  */
 function renderSession(session: SessionState, now: Date): string {
-  const lines = [`<session>`, `turn: ${session.turnCount}`];
+  const lines = [`<session>`];
 
   const intents = session.intents
     .filter((intent) => intent.status === "active" || intent.status === "stale")
@@ -168,9 +180,7 @@ function renderSession(session: SessionState, now: Date): string {
     }
   }
 
-  if (session.contextFiles.length > 0) {
-    lines.push(`files in context: ${session.contextFiles.join(", ")}`);
-  }
+  if (lines.length === 1) lines.push(`nothing open`);
 
   lines.push(`</session>`);
   return lines.join("\n");
