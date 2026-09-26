@@ -1,9 +1,10 @@
 import { z } from "zod";
+
 import { IsoDateTimeSchema, SlugSchema } from "../ids";
 
 /**
  * Where a file came from. Only `user` code is evidence about the learner;
- * scaffolding, vendored and generated code must not calibrate teaching
+ * scaffolding, vendored and generated code must not calibrate teaching.
  */
 export const FileOriginSchema = z.enum([
   "user",
@@ -15,8 +16,15 @@ export type FileOrigin = z.infer<typeof FileOriginSchema>;
 
 export const SubprojectSchema = z.object({
   id: SlugSchema,
+  /** Path relative to repoRoot. "." for a single-project repository. */
   path: z.string().min(1),
   languages: z.array(z.string().min(1)).default([]),
+  /**
+   * Declared language or runtime version, from the project manifest. Models
+   * trained before a version change teach its older semantics with confidence,
+   * so the tutor is told which version is actually in use.
+   */
+  languageVersion: z.string().min(1).optional(),
   entrypoints: z.array(z.string().min(1)).default([]),
   dependencies: z.array(z.string().min(1)).default([]),
   testCommand: z.string().min(1).optional(),
@@ -38,8 +46,9 @@ export const RepoModelSchema = z.object({
   schemaVersion: z.literal(REPO_MODEL_SCHEMA_VERSION),
   repoRoot: z.string().min(1),
   indexedAt: IsoDateTimeSchema,
-  /** Without git, authorship is undeterminable and origins degrades to unknown  */
+  /** Without git, authorship is undeterminable and origin degrades to unknown */
   hasGit: z.boolean(),
+  singleAuthor: z.boolean().default(false),
   subprojects: z.array(SubprojectSchema).min(1),
   fileStats: FileStatsSchema,
   userAuthoredFiles: z.array(z.string().min(1)).default([]),
