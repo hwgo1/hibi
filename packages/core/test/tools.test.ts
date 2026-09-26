@@ -2,8 +2,10 @@ import { describe, expect, test } from "bun:test";
 
 import { seedRegistry } from "../src/concepts";
 import type { SessionId, UserId } from "../src/ids";
-import { DEFAULT_TEACHING_PREFERENCES } from "../src/schemas/learner";
-import type { LearnerModel } from "../src/schemas/learner";
+import {
+  DEFAULT_TEACHING_PREFERENCES,
+  type LearnerModel,
+} from "../src/schemas/learner";
 import type { SessionState } from "../src/schemas/session";
 import { buildToolRegistry, type ToolContext } from "../src/tools";
 
@@ -50,7 +52,8 @@ describe("tool surface", () => {
   test("exposes no tool that writes a solution", () => {
     const names = buildToolRegistry()
       .definitions()
-      .map((d) => d.name);
+      .map((definition) => definition.name);
+
     expect(names).not.toContain("write_solution");
     expect(names).not.toContain("fix_code");
   });
@@ -58,7 +61,8 @@ describe("tool surface", () => {
   test("give_hint takes no depth argument", () => {
     const hint = buildToolRegistry()
       .definitions()
-      .find((d) => d.name === "give_hint")!;
+      .find((definition) => definition.name === "give_hint")!;
+
     const properties = (
       hint.parameters as { properties: Record<string, unknown> }
     ).properties;
@@ -88,7 +92,7 @@ describe("explain_concept", () => {
 });
 
 describe("give_hint", () => {
-  test("creates a resolve intent and returns a depth instruction", async () => {
+  test("creates a resolve intent and returns a depth instruction after an attempt", async () => {
     const ctx = context();
     const registry = buildToolRegistry();
 
@@ -99,6 +103,12 @@ describe("give_hint", () => {
     );
     const exerciseId = ctx.session.intents[0]!.id;
 
+    await registry.execute(
+      "record_attempt",
+      { intentId: exerciseId, outcome: "fail" },
+      ctx,
+    );
+
     const result = await registry.execute(
       "give_hint",
       { targetIntentId: exerciseId },
@@ -106,8 +116,9 @@ describe("give_hint", () => {
     );
 
     expect(result.content).toContain("Step");
-    const resolveIntent = ctx.session.intents.find((i) => i.kind === "resolve");
-    expect(resolveIntent).toBeDefined();
+    expect(
+      ctx.session.intents.some((intent) => intent.kind === "resolve"),
+    ).toBe(true);
   });
 
   test("a direct request for the answer jumps to step 3 and marks disclosure", async () => {
@@ -127,7 +138,9 @@ describe("give_hint", () => {
       ctx,
     );
 
-    const resolveIntent = ctx.session.intents.find((i) => i.kind === "resolve");
+    const resolveIntent = ctx.session.intents.find(
+      (intent) => intent.kind === "resolve",
+    );
     expect(resolveIntent?.kind === "resolve" && resolveIntent.step).toBe(3);
     expect(
       resolveIntent?.kind === "resolve" && resolveIntent.userForcedDisclosure,

@@ -9,6 +9,7 @@ import {
 import type { IntentId } from "../ids";
 import {
   deriveEntryStep,
+  effortFloorMet,
   nextStep,
   STEP_INSTRUCTIONS,
 } from "../policy/hint-ladder";
@@ -320,11 +321,13 @@ export const giveHint: Tool<ToolContext> = {
       const mastery = context.learner.mastery.find(
         (m) => m.conceptId === source.conceptId,
       );
+      const attempts = attemptsThisTurn(context, source.conceptId);
+
       const entryStep = deriveEntryStep({
         hasExistingCode: true,
         questionIsSpecific: true,
         masteryLevel: mastery?.level ?? null,
-        selfReportedAttempts: 0,
+        selfReportedAttempts: attempts,
       });
 
       resolveIntent = {
@@ -334,7 +337,7 @@ export const giveHint: Tool<ToolContext> = {
         target: { type: "exercise", intentId: args.targetIntentId as IntentId },
         entryStep,
         step: entryStep,
-        attempts: 0,
+        attempts,
         hintsGiven: 0,
         attemptsAtLastHint: 0,
         createdAt: at,
@@ -345,9 +348,25 @@ export const giveHint: Tool<ToolContext> = {
       context.session.intents.push(resolveIntent);
     }
 
+    const forced = args.userRequestedFullAnswer === true;
+    const effort = effortFloorMet({
+      intent: resolveIntent,
+      clock: context.clock,
+    });
+
+    if (!effort.met && !forced) {
+      const minutes = Math.ceil(effort.remainingMs / 60_000);
+      return {
+        content:
+          `Too early for a hint: the user has not attempted this yet. ` +
+          `Ask what they think the problem is, or suggest they run the tests. ` +
+          `A hint becomes available after an attempt, or in about ${minutes} minute(s).`,
+      };
+    }
+
     const step = nextStep({
       intent: resolveIntent,
-      userRequested: args.userRequestedFullAnswer === true,
+      userRequested: forced,
       clock: context.clock,
     });
 
@@ -356,8 +375,7 @@ export const giveHint: Tool<ToolContext> = {
     resolveIntent.attemptsAtLastHint = resolveIntent.attempts;
     resolveIntent.lastHintAt = at;
     resolveIntent.lastTouchedAt = at;
-    if (args.userRequestedFullAnswer === true)
-      resolveIntent.userForcedDisclosure = true;
+    if (forced) resolveIntent.userForcedDisclosure = true;
     context.session.activeIntentId = resolveIntent.id;
 
     context.pendingEvidence.push({
@@ -370,6 +388,14 @@ export const giveHint: Tool<ToolContext> = {
     return { content: `Step ${step}. ${STEP_INSTRUCTIONS[step]}` };
   },
 };
+
+function attemptsThisTurn(context: ToolContext, conceptId: ConceptId): number {
+  return context.pendingEvidence.filter(
+    (evidence) =>
+      evidence.conceptId === conceptId &&
+      (evidence.kind === "attempt_submitted" || evidence.kind === "test_run"),
+  ).length;
+}
 
 function findResolveIntent(
   context: ToolContext,

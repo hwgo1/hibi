@@ -6,6 +6,7 @@ import {
   giveHint,
   proposeExercise,
 } from "./teaching";
+import { verify } from "./verify-tools";
 import { listFiles, readFile, recordAttempt } from "./workspace-tools";
 
 export function buildToolRegistry(): ToolRegistry<ToolContext> {
@@ -14,6 +15,7 @@ export function buildToolRegistry(): ToolRegistry<ToolContext> {
     .register(demonstrateCode)
     .register(proposeExercise)
     .register(giveHint)
+    .register(verify)
     .register(listFiles)
     .register(readFile)
     .register(recordAttempt);

@@ -19,3 +19,5 @@ export * from "./adapters/workspace-fs";
 export * from "./adapters/fake-provider";
 export * from "./adapters/openai-provider";
 export * from "./adapters/anthropic-provider";
+export * from "./verify/runner";
+export * from "./verify/classify";

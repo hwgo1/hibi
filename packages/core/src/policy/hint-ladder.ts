@@ -35,6 +35,35 @@ export const ESCALATION = {
   stuckMs: 8 * 60 * 1000,
 } as const;
 
+/**
+ * Minimum real effort before the first hint. A hint received before the
+ * learner has engaged does not stick, and without a floor the ladder degrades
+ * into autocomplete with extra steps
+ */
+export const EFFORT_FLOOR = {
+  minimumMs: 3 * 60 * 1000,
+  orAfterAttempts: 1,
+} as const;
+
+export interface EffortInput {
+  intent: ResolveIntent;
+  clock: Clock;
+}
+
+export type EffortCheck = { met: true } | { met: false; remainingMs: number };
+
+export function effortFloorMet(input: EffortInput): EffortCheck {
+  const { intent, clock } = input;
+
+  if (intent.hintsGiven > 0) return { met: true };
+  if (intent.attempts >= EFFORT_FLOOR.orAfterAttempts) return { met: true };
+
+  const elapsed = clock.now().getTime() - Date.parse(intent.createdAt);
+  if (elapsed >= EFFORT_FLOOR.minimumMs) return { met: true };
+
+  return { met: false, remainingMs: EFFORT_FLOOR.minimumMs - elapsed };
+}
+
 export interface EscalationInput {
   intent: ResolveIntent;
   /** Set when the user asked to skip ahead */
