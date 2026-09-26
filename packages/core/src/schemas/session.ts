@@ -1,4 +1,5 @@
 import { z } from "zod";
+
 import { ConceptIdSchema } from "../concepts";
 import {
   FindingIdSchema,
@@ -8,6 +9,7 @@ import {
   UnitIntervalSchema,
   UserIdSchema,
 } from "../ids";
+import { DisputeSchema, OpenQuizSchema } from "./quiz";
 
 /** Locates a snippet without relying on line numbers, which drafts as soon as the user edits above the anchor.
  * `contentHash` detects a stale anchor; `snippet` allows re-locating it
@@ -42,8 +44,8 @@ export const FindingSchema = z.object({
 
 export type Finding = z.infer<typeof FindingSchema>;
 
-/** How long an active intent may sit untouched before a resume marks it stale */
-export const STALE_INTENT_THRESHOLD_MS = 72 * 60 * 60 * 1000; // 3 days
+export const STALE_INTENT_THRESHOLD_MS = 72 * 60 * 60 * 1000;
+
 export const HINT_STEPS = [1, 2, 3] as const;
 export const HintStepSchema = z.union([
   z.literal(1),
@@ -117,6 +119,8 @@ export const SessionStateSchema = z.object({
   activeIntentId: IntentIdSchema.nullable().default(null),
   findings: z.array(FindingSchema).default([]),
   contextFiles: z.array(z.string().min(1)).default([]),
+  openQuiz: OpenQuizSchema.nullable().default(null),
+  disputes: z.array(DisputeSchema).default([]),
   turnCount: z.number().int().nonnegative().default(0),
 });
 

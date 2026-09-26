@@ -15,6 +15,7 @@ export const EVIDENCE_KINDS = [
   "code_demonstrated",
   "exercise_proposed",
   "attempt_submitted",
+  "quiz_answered",
   "self_assessment",
   "hint_given",
   "audit_finding",

@@ -1,4 +1,5 @@
 import type { ToolContext } from "./context";
+import { answerQuiz, askQuiz, disputeMastery } from "./quiz-tools";
 import { ToolRegistry } from "./registry";
 import {
   demonstrateCode,
@@ -15,6 +16,9 @@ export function buildToolRegistry(): ToolRegistry<ToolContext> {
     .register(demonstrateCode)
     .register(proposeExercise)
     .register(giveHint)
+    .register(askQuiz)
+    .register(answerQuiz)
+    .register(disputeMastery)
     .register(verify)
     .register(listFiles)
     .register(readFile)

@@ -21,14 +21,11 @@ import { buildToolRegistry } from "../tools";
 import type { ToolRegistry } from "../tools/registry";
 import { buildSystemPrompt } from "./prompt";
 
-/** Bounds a single turn so a misbehaving model cannot loop indefinitely */
-const MAX_TOOL_ROUNDS = 8;
+const MAX_TOOL_ROUNDS = 5;
 const MAX_TOKENS = 4096;
 const MAX_RETRIES = 2;
 const RETRY_BASE_MS = 500;
-
-/** Transcript turns kept in the request. Older ones are dropped */
-const TRANSCRIPT_WINDOW = 12;
+const TRANSCRIPT_WINDOW = 6;
 
 export type TurnEvent =
   | { type: "text"; text: string }
@@ -254,6 +251,7 @@ export class TutorSession {
       (event) =>
         event.kind === "attempt_submitted" ||
         event.kind === "test_run" ||
+        event.kind === "quiz_answered" ||
         event.kind === "self_assessment",
     );
     if (!changesMastery) return;
@@ -285,6 +283,8 @@ export function newSessionState(
     activeIntentId: null,
     findings: [],
     contextFiles: [],
+    openQuiz: null,
+    disputes: [],
     turnCount: 0,
   };
 }

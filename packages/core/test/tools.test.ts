@@ -1,52 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import { seedRegistry } from "../src/concepts";
-import type { SessionId, UserId } from "../src/ids";
-import {
-  DEFAULT_TEACHING_PREFERENCES,
-  type LearnerModel,
-} from "../src/schemas/learner";
-import type { SessionState } from "../src/schemas/session";
-import { buildToolRegistry, type ToolContext } from "../src/tools";
-
-const NOW = new Date("2026-01-01T12:00:00.000Z");
-
-function context(): ToolContext {
-  const session: SessionState = {
-    schemaVersion: 1,
-    sessionId: "s1" as SessionId,
-    userId: "local" as UserId,
-    repoRoot: "/tmp/repo",
-    createdAt: NOW.toISOString(),
-    updatedAt: NOW.toISOString(),
-    intents: [],
-    activeIntentId: null,
-    findings: [],
-    contextFiles: [],
-    turnCount: 0,
-  };
-
-  const learner: LearnerModel = {
-    schemaVersion: 1,
-    userId: "local" as UserId,
-    createdAt: NOW.toISOString(),
-    updatedAt: NOW.toISOString(),
-    preferences: DEFAULT_TEACHING_PREFERENCES,
-    mastery: [],
-    recurringErrors: [],
-    inferredSignals: [],
-  };
-
-  return {
-    session,
-    learner,
-    registry: seedRegistry(NOW),
-    workspace: {} as ToolContext["workspace"],
-    storage: {} as ToolContext["storage"],
-    clock: { now: () => NOW },
-    pendingEvidence: [],
-  };
-}
+import { buildToolRegistry } from "../src/tools";
+import { testContext } from "./fixtures";
 
 describe("tool surface", () => {
   test("exposes no tool that writes a solution", () => {
@@ -70,15 +25,24 @@ describe("tool surface", () => {
     expect(Object.keys(properties)).not.toContain("level");
   });
 
+  test("no tool sets a mastery estimate directly", () => {
+    const names = buildToolRegistry()
+      .definitions()
+      .map((definition) => definition.name);
+
+    expect(names).not.toContain("set_mastery");
+    expect(names).not.toContain("update_mastery");
+  });
+
   test("an unknown tool returns an error result instead of throwing", async () => {
-    const result = await buildToolRegistry().execute("nope", {}, context());
+    const result = await buildToolRegistry().execute("nope", {}, testContext());
     expect(result.isError).toBe(true);
   });
 });
 
 describe("explain_concept", () => {
   test("creates an intent with no ladder and resolves the term", async () => {
-    const ctx = context();
+    const ctx = testContext();
     await buildToolRegistry().execute(
       "explain_concept",
       { conceptTerm: "concurrency" },
@@ -93,7 +57,7 @@ describe("explain_concept", () => {
 
 describe("give_hint", () => {
   test("creates a resolve intent and returns a depth instruction after an attempt", async () => {
-    const ctx = context();
+    const ctx = testContext();
     const registry = buildToolRegistry();
 
     await registry.execute(
@@ -122,7 +86,7 @@ describe("give_hint", () => {
   });
 
   test("a direct request for the answer jumps to step 3 and marks disclosure", async () => {
-    const ctx = context();
+    const ctx = testContext();
     const registry = buildToolRegistry();
 
     await registry.execute(
