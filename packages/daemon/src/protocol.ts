@@ -8,12 +8,20 @@ export const ClientRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("message"), text: z.string().min(1) }),
   z.object({ type: z.literal("state") }),
   z.object({ type: z.literal("profile") }),
+  z.object({ type: z.literal("signals") }),
   z.object({
     type: z.literal("set_preference"),
     key: z.string().min(1),
     value: z.string().min(1),
   }),
+  z.object({ type: z.literal("undo") }),
+  z.object({
+    type: z.literal("forget"),
+    scope: z.enum(["concept", "all"]),
+    value: z.string().min(1).optional(),
+  }),
   z.object({ type: z.literal("clear") }),
+  z.object({ type: z.literal("reindex") }),
   z.object({ type: z.literal("shutdown") }),
 ]);
 
@@ -23,10 +31,17 @@ export type ServerEvent =
   | { type: "text"; text: string }
   | { type: "tool"; name: string }
   | { type: "step"; step: 1 | 2 | 3 }
-  | { type: "usage"; inputTokens: number; outputTokens: number; model: string }
+  | {
+      type: "usage";
+      inputTokens: number;
+      cachedInputTokens: number;
+      outputTokens: number;
+      model: string;
+    }
   | { type: "turn_end" }
   | { type: "state"; payload: unknown }
   | { type: "profile"; payload: unknown }
+  | { type: "signals"; payload: unknown }
   | { type: "ok"; message: string }
   | { type: "error"; message: string };
 

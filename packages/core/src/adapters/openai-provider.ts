@@ -126,6 +126,7 @@ export class OpenAIProvider implements LLMProvider {
         if (chunk.usage != null) {
           usage = {
             inputTokens: chunk.usage.prompt_tokens,
+            cachedInputTokens: chunk.usage.prompt_tokens_details?.cached_tokens,
             outputTokens: chunk.usage.completion_tokens,
           };
         }

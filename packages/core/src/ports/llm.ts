@@ -19,6 +19,7 @@ export interface ToolResult {
 
 export interface TokenUsage {
   inputTokens: number;
+  cachedInputTokens?: number;
   outputTokens: number;
 }
 

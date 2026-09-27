@@ -5,18 +5,23 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import {
+  computeMastery,
+  EVIDENCE_EVENT_SCHEMA_VERSION,
+  indexRepo,
   newSessionState,
+  retractionNote,
   StorageLocal,
   systemClock,
   TeachingPreferencesSchema,
   TutorSession,
   WorkspaceFs,
   type Clock,
+  type ConceptId,
+  type EvidenceId,
   type LLMProvider,
   type ProviderMessage,
   type SessionId,
   type SessionState,
-  type Storage,
   type UserId,
 } from "@hibi/core";
 
@@ -36,6 +41,9 @@ const LOCAL_USER = "local" as UserId;
 /** Transcript is kept in memory only: durable state lives in the session file. */
 const TRANSCRIPT_CAP = 24;
 
+/** Concept attached to retractions, which are bookkeeping rather than learning */
+const SYSTEM_CONCEPT = "programming-fundamentals" as ConceptId;
+
 export interface DaemonOptions {
   repoRoot: string;
   provider: LLMProvider;
@@ -52,7 +60,7 @@ export function socketPath(repoRoot: string, home: string): string {
 }
 
 export class Daemon {
-  private readonly storage: Storage;
+  private readonly storage: StorageLocal;
   private readonly tutor: TutorSession;
   private readonly queue = new TurnQueue();
   private readonly clients = new Set<Socket>();
@@ -88,6 +96,7 @@ export class Daemon {
     }
 
     this.session = await this.loadSession();
+    await this.ensureIndexed();
 
     const path = socketPath(this.options.repoRoot, this.home);
     await rm(path, { force: true });
@@ -124,6 +133,23 @@ export class Daemon {
     return existing;
   }
 
+  /**
+   * Indexes the repository when no model exists yet, so a first run needs no
+   * separate command. Failure is not fatal: the tutor can still read files, it
+   * just starts each session without a map.
+   */
+  private async ensureIndexed(): Promise<void> {
+    if ((await this.storage.loadRepoModel(this.options.repoRoot)) !== null)
+      return;
+
+    try {
+      const model = await indexRepo(this.options.repoRoot, this.clock.now());
+      await this.storage.saveRepoModel(model);
+    } catch {
+      // leaves the repo model null; the prompt omits the <repo> block
+    }
+  }
+
   private attach(socket: Socket): void {
     this.clients.add(socket);
     socket.setNoDelay(true);
@@ -151,15 +177,22 @@ export class Daemon {
 
   private async handle(request: ClientRequest, socket: Socket): Promise<void> {
     if (request.type === "state") {
-      socket.write(encode({ type: "state", payload: this.session }));
-      socket.write(encode({ type: "turn_end" }));
+      this.reply(socket, { type: "state", payload: this.session });
       return;
     }
 
     if (request.type === "profile") {
       const learner = await this.storage.loadLearnerModel(LOCAL_USER);
-      socket.write(encode({ type: "profile", payload: learner }));
-      socket.write(encode({ type: "turn_end" }));
+      this.reply(socket, { type: "profile", payload: learner });
+      return;
+    }
+
+    if (request.type === "signals") {
+      const learner = await this.storage.loadLearnerModel(LOCAL_USER);
+      this.reply(socket, {
+        type: "signals",
+        payload: learner?.inferredSignals ?? [],
+      });
       return;
     }
 
@@ -168,10 +201,24 @@ export class Daemon {
       return;
     }
 
+    if (request.type === "undo") {
+      await this.undoLastTurn(socket);
+      return;
+    }
+
+    if (request.type === "forget") {
+      await this.forget(request.scope, request.value, socket);
+      return;
+    }
+
     if (request.type === "clear") {
-      this.clearTranscript();
-      socket.write(encode({ type: "ok", message: "conversation cleared" }));
-      socket.write(encode({ type: "turn_end" }));
+      this.transcript = [];
+      this.reply(socket, { type: "ok", message: "conversation cleared" });
+      return;
+    }
+
+    if (request.type === "reindex") {
+      await this.reindex(socket);
       return;
     }
 
@@ -182,10 +229,6 @@ export class Daemon {
     }
 
     await this.queue.run(() => this.runTurn(request.text));
-  }
-
-  private clearTranscript(): void {
-    this.transcript = [];
   }
 
   /**
@@ -200,16 +243,15 @@ export class Daemon {
     const learner = await this.storage.loadLearnerModel(LOCAL_USER);
 
     if (learner === null) {
-      socket.write(encode({ type: "error", message: "no profile yet" }));
-      socket.write(encode({ type: "turn_end" }));
+      this.reply(socket, { type: "error", message: "no profile yet" });
       return;
     }
 
     if (!Object.keys(learner.preferences).includes(key)) {
-      socket.write(
-        encode({ type: "error", message: `unknown preference: ${key}` }),
-      );
-      socket.write(encode({ type: "turn_end" }));
+      this.reply(socket, {
+        type: "error",
+        message: `unknown preference: ${key}`,
+      });
       return;
     }
 
@@ -219,13 +261,10 @@ export class Daemon {
     });
 
     if (!parsed.success) {
-      socket.write(
-        encode({
-          type: "error",
-          message: `invalid value for ${key}: ${value}`,
-        }),
-      );
-      socket.write(encode({ type: "turn_end" }));
+      this.reply(socket, {
+        type: "error",
+        message: `invalid value for ${key}: ${value}`,
+      });
       return;
     }
 
@@ -233,8 +272,131 @@ export class Daemon {
     learner.updatedAt = this.clock.now().toISOString();
     await this.storage.saveLearnerModel(learner);
 
-    socket.write(encode({ type: "ok", message: `${key} = ${value}` }));
-    socket.write(encode({ type: "turn_end" }));
+    this.reply(socket, { type: "ok", message: `${key} = ${value}` });
+  }
+
+  private async undoLastTurn(socket: Socket): Promise<void> {
+    if (this.session === null || this.session.turnCount === 0) {
+      this.reply(socket, { type: "error", message: "nothing to undo" });
+      return;
+    }
+
+    await this.appendRetraction(
+      this.session.sessionId,
+      this.session.turnCount,
+      SYSTEM_CONCEPT,
+    );
+
+    this.transcript = this.transcript.slice(0, -2);
+    await this.recomputeMastery();
+
+    this.reply(socket, {
+      type: "ok",
+      message: `turn ${this.session.turnCount} retracted`,
+    });
+  }
+
+  /** Retracts evidence for one concept, or removes the log entirely */
+  private async forget(
+    scope: "concept" | "all",
+    value: string | undefined,
+    socket: Socket,
+  ): Promise<void> {
+    if (scope === "all") {
+      const count = await this.storage.countEvidence();
+      await this.storage.clearEvidence();
+      await this.recomputeMastery();
+
+      this.reply(socket, {
+        type: "ok",
+        message: `removed ${count} events permanently`,
+      });
+      return;
+    }
+
+    if (value === undefined) {
+      this.reply(socket, { type: "error", message: "which concept?" });
+      return;
+    }
+
+    const conceptId = value as ConceptId;
+    const events = await this.storage.queryEvidence({
+      userId: LOCAL_USER,
+      conceptId,
+    });
+    const turns = new Map<
+      string,
+      { sessionId: SessionId; turnIndex: number }
+    >();
+
+    for (const event of events) {
+      turns.set(`${event.sessionId}:${event.turnIndex}`, {
+        sessionId: event.sessionId,
+        turnIndex: event.turnIndex,
+      });
+    }
+
+    for (const turn of turns.values()) {
+      await this.appendRetraction(turn.sessionId, turn.turnIndex, conceptId);
+    }
+
+    await this.recomputeMastery();
+    this.reply(socket, {
+      type: "ok",
+      message: `retracted ${turns.size} turns on ${conceptId}`,
+    });
+  }
+
+  private async appendRetraction(
+    sessionId: SessionId,
+    turnIndex: number,
+    conceptId: ConceptId,
+  ): Promise<void> {
+    await this.storage.appendEvidence({
+      schemaVersion: EVIDENCE_EVENT_SCHEMA_VERSION,
+      id: `ev_${Math.random().toString(36).slice(2, 12)}` as EvidenceId,
+      at: this.clock.now().toISOString(),
+      userId: LOCAL_USER,
+      sessionId,
+      turnIndex,
+      kind: "turn_retracted",
+      conceptId,
+      provenance: "system",
+      confidence: 0,
+      outcome: "n/a",
+      note: retractionNote(turnIndex),
+    });
+  }
+
+  /** Rebuilds mastery from the visible log after evidence changes */
+  private async recomputeMastery(): Promise<void> {
+    const learner = await this.storage.loadLearnerModel(LOCAL_USER);
+    const registry = await this.storage.loadConceptRegistry(LOCAL_USER);
+    if (learner === null || registry === null) return;
+
+    const events = await this.storage.queryEvidence({ userId: LOCAL_USER });
+    const now = this.clock.now();
+
+    learner.mastery = computeMastery(registry, events, now);
+    learner.updatedAt = now.toISOString();
+    await this.storage.saveLearnerModel(learner);
+  }
+
+  /** Rebuilds the repository model on demand */
+  private async reindex(socket: Socket): Promise<void> {
+    try {
+      const model = await indexRepo(this.options.repoRoot, this.clock.now());
+      await this.storage.saveRepoModel(model);
+      this.reply(socket, {
+        type: "ok",
+        message: `indexed ${model.fileStats.total} files, ${model.fileStats.user} yours`,
+      });
+    } catch (error) {
+      this.reply(socket, {
+        type: "error",
+        message: `index failed: ${String(error)}`,
+      });
+    }
   }
 
   /**
@@ -261,6 +423,7 @@ export class Daemon {
           this.broadcast({
             type: "usage",
             inputTokens: event.usage.inputTokens,
+            cachedInputTokens: event.usage.cachedInputTokens ?? 0,
             outputTokens: event.usage.outputTokens,
             model: event.model,
           });
@@ -287,6 +450,12 @@ export class Daemon {
     }
 
     this.broadcast({ type: "turn_end" });
+  }
+
+  /** Answers one client and closes the exchange. */
+  private reply(socket: Socket, event: ServerEvent): void {
+    socket.write(encode(event));
+    socket.write(encode({ type: "turn_end" }));
   }
 
   private broadcast(event: ServerEvent): void {

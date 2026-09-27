@@ -1,4 +1,4 @@
-import type { LearnerModel, SessionState } from "@hibi/core";
+import type { InferredSignal, LearnerModel, SessionState } from "@hibi/core";
 
 import { ui } from "./render";
 
@@ -46,6 +46,26 @@ export function formatState(session: SessionState): string {
     );
   }
 
+  if (session.openQuiz !== null) {
+    const quiz = session.openQuiz;
+    lines.push(
+      ui.dim(
+        `quiz open: question ${quiz.cursor + 1} of ${quiz.questions.length}`,
+      ),
+    );
+  }
+
+  const disputes = session.disputes.filter(
+    (dispute) => dispute.status === "open",
+  );
+  if (disputes.length > 0) {
+    lines.push(
+      ui.dim(
+        `disputed: ${disputes.map((dispute) => dispute.conceptId).join(", ")}`,
+      ),
+    );
+  }
+
   const findings = session.findings.filter(
     (finding) => finding.status !== "resolved",
   );
@@ -81,7 +101,7 @@ export function formatProfile(learner: LearnerModel): string {
   for (const entry of ranked.slice(0, MASTERY_ROWS)) {
     lines.push(
       `  ${entry.conceptId}: ${entry.level.toFixed(2)} ${ui.dim(
-        `(confidence ${entry.confidence.toFixed(2)})`,
+        `(confidence ${entry.confidence.toFixed(2)}, ${entry.directEvidenceCount} direct)`,
       )}`,
     );
   }
@@ -93,5 +113,32 @@ export function formatProfile(learner: LearnerModel): string {
     }
   }
 
+  lines.push(
+    ui.dim(
+      "\ndisagree with a number? say so — hibi will offer a way to show otherwise",
+    ),
+  );
+  return lines.join("\n");
+}
+
+export function formatSignals(signals: InferredSignal[]): string {
+  if (signals.length === 0) {
+    return ui.dim("hibi has not inferred anything about you yet");
+  }
+
+  const lines = [ui.bold("observed tendencies")];
+
+  for (const signal of signals) {
+    const confidence = `${Math.round(signal.confidence * 100)}%`;
+    lines.push(
+      `  ${signal.key} = ${signal.value} ${ui.dim(`(${confidence}, ${signal.evidenceCount} events)`)}`,
+    );
+  }
+
+  lines.push(
+    ui.dim(
+      "  these are guesses — declare the opposite with /prefs to override one",
+    ),
+  );
   return lines.join("\n");
 }

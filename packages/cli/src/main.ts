@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
 import { stdin, stdout } from "node:process";
-import { createInterface } from "node:readline/promises";
+import { createInterface, type Interface } from "node:readline/promises";
 
 import {
   StorageLocal,
+  type InferredSignal,
   type LearnerModel,
   type SessionState,
   type UserId,
@@ -11,10 +12,18 @@ import {
 import { Daemon, findRepoRoot, socketPath } from "@hibi/daemon";
 
 import { DaemonClient } from "./client";
-import { HIBI_HOME, loadCredentials } from "./config";
-import { formatProfile, formatState } from "./format";
+import {
+  activateProvider,
+  clearCredentials,
+  HIBI_HOME,
+  loadCredentials,
+  ProviderIdSchema,
+  setActiveModel,
+  storedProviders,
+} from "./config";
+import { formatProfile, formatSignals, formatState } from "./format";
 import { catalogFor, type Catalog } from "./i18n";
-import { buildProvider } from "./models";
+import { buildProvider, MODEL_CHOICES } from "./models";
 import { runOnboarding } from "./onboarding";
 import {
   addUsage,
@@ -39,8 +48,11 @@ const PREFERENCE_KEYS = [
   "explanationStyle",
 ] as const;
 
-const HELP =
-  "/state [--json]  /profile [--json]  /prefs [key value]  /clear  /cost  /stop  /exit";
+const HELP = [
+  "/state [--json]  /profile [--json]  /signals  /prefs [key value]",
+  "/model [name]  /provider [name]  /reset",
+  "/index  /undo  /forget <concept|all>  /clear  /cost  /stop  /exit",
+].join("\n");
 
 async function runDaemon(repoRoot: string): Promise<void> {
   const credentials = await loadCredentials();
@@ -161,7 +173,11 @@ async function chat(repoRoot: string): Promise<void> {
     if (event.type === "usage") {
       spend = addUsage(
         spend,
-        { inputTokens: event.inputTokens, outputTokens: event.outputTokens },
+        {
+          inputTokens: event.inputTokens,
+          cachedInputTokens: event.cachedInputTokens,
+          outputTokens: event.outputTokens,
+        },
         event.model,
       );
       return;
@@ -190,6 +206,8 @@ async function chat(repoRoot: string): Promise<void> {
           ? `${JSON.stringify(event.payload, null, 2)}\n`
           : `${formatProfile(event.payload as LearnerModel)}\n`,
       );
+    } else if (event.type === "signals") {
+      stdout.write(`${formatSignals(event.payload as InferredSignal[])}\n`);
     }
   });
 
@@ -224,8 +242,36 @@ async function chat(repoRoot: string): Promise<void> {
       await client.sendAndWait({ type: "profile" });
       continue;
     }
+    if (text === "/signals") {
+      await client.sendAndWait({ type: "signals" });
+      continue;
+    }
     if (text.startsWith("/prefs")) {
       await handlePrefs(text, client, storage, strings);
+      continue;
+    }
+    if (text.startsWith("/model")) {
+      await handleModel(text, strings);
+      continue;
+    }
+    if (text.startsWith("/provider")) {
+      await handleProvider(text, strings);
+      continue;
+    }
+    if (text === "/reset") {
+      await handleReset(rl, strings);
+      continue;
+    }
+    if (text === "/index") {
+      await client.sendAndWait({ type: "reindex" });
+      continue;
+    }
+    if (text === "/undo") {
+      await client.sendAndWait({ type: "undo" });
+      continue;
+    }
+    if (text.startsWith("/forget")) {
+      await handleForget(text, client, rl, strings);
       continue;
     }
     if (text === "/clear") {
@@ -241,7 +287,7 @@ async function chat(repoRoot: string): Promise<void> {
       break;
     }
     if (text.startsWith("/")) {
-      stdout.write(ui.dim(`unknown command. ${HELP}\n`));
+      stdout.write(ui.dim(`unknown command\n${HELP}\n`));
       continue;
     }
 
@@ -286,6 +332,103 @@ async function handlePrefs(
   }
 
   await client.sendAndWait({ type: "set_preference", key, value });
+}
+
+async function handleModel(input: string, strings: Catalog): Promise<void> {
+  const [, model] = input.split(/\s+/);
+  const current = await loadCredentials();
+
+  if (model === undefined) {
+    stdout.write(`  ${ui.bold("current")}: ${current?.model ?? "none"}\n`);
+
+    if (current !== null) {
+      for (const choice of MODEL_CHOICES[current.provider]) {
+        stdout.write(`  ${choice.label} ${ui.dim(`— ${choice.note}`)}\n`);
+      }
+    }
+    stdout.write(ui.dim("  /model <name>\n"));
+    return;
+  }
+
+  const updated = await setActiveModel(model);
+  if (updated === null) {
+    stdout.write(ui.dim(`  ${strings.noProfile}\n`));
+    return;
+  }
+
+  stdout.write(ui.dim(`  ${strings.restartNeeded}\n`));
+}
+
+/** Switches provider among those with a stored key */
+async function handleProvider(input: string, strings: Catalog): Promise<void> {
+  const [, name] = input.split(/\s+/);
+  const stored = await storedProviders();
+
+  if (name === undefined) {
+    const current = await loadCredentials();
+    stdout.write(`  ${ui.bold("active")}: ${current?.provider ?? "none"}\n`);
+    stdout.write(`  ${ui.dim(`stored: ${stored.join(", ") || "none"}`)}\n`);
+    stdout.write(ui.dim("  /provider openai | anthropic\n"));
+    return;
+  }
+
+  const parsed = ProviderIdSchema.safeParse(name);
+  if (!parsed.success) {
+    stdout.write(ui.dim("  unknown provider\n"));
+    return;
+  }
+
+  const activated = await activateProvider(parsed.data);
+  if (activated === null) {
+    stdout.write(
+      ui.dim(`  no key stored for ${parsed.data} — run /reset to add one\n`),
+    );
+    return;
+  }
+
+  stdout.write(ui.dim(`  ${strings.restartNeeded}\n`));
+}
+
+/** Removes stored credentials so the next run goes through onboarding again */
+async function handleReset(rl: Interface, strings: Catalog): Promise<void> {
+  const answer = (await rl.question(`  ${strings.confirmReset} [y/N]: `))
+    .trim()
+    .toLowerCase();
+  if (answer !== "y") return;
+
+  await clearCredentials();
+  stdout.write(ui.dim(`  ${strings.restartNeeded}\n`));
+}
+
+async function handleForget(
+  input: string,
+  client: DaemonClient,
+  rl: Interface,
+  strings: Catalog,
+): Promise<void> {
+  const [, target] = input.split(/\s+/);
+
+  if (target === undefined) {
+    stdout.write(ui.dim("  /forget <concept> | /forget all\n"));
+    return;
+  }
+
+  if (target !== "all") {
+    await client.sendAndWait({
+      type: "forget",
+      scope: "concept",
+      value: target,
+    });
+    return;
+  }
+
+  stdout.write(`  ${strings.forgetWarning}\n`);
+  const answer = (await rl.question(`  ${strings.typeForget} `))
+    .trim()
+    .toLowerCase();
+  if (answer !== "forget") return;
+
+  await client.sendAndWait({ type: "forget", scope: "all" });
 }
 
 const [command] = process.argv.slice(2);

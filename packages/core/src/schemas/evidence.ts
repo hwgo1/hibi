@@ -22,6 +22,7 @@ export const EVIDENCE_KINDS = [
   "test_run",
   "external_code_detected",
   "intent_abandoned",
+  "turn_retracted",
 ] as const;
 
 export const EvidenceKindSchema = z.enum(EVIDENCE_KINDS);
@@ -46,7 +47,6 @@ export const PROVENANCES = [
 export const ProvenanceSchema = z.enum(PROVENANCES);
 export type Provenance = z.infer<typeof ProvenanceSchema>;
 
-/** Weight each provenance carries in mastery */
 export const PROVENANCE_WEIGHTS: Record<Provenance, number> = {
   execution: 1,
   graded_choice: 0.8,
@@ -58,7 +58,8 @@ export const PROVENANCE_WEIGHTS: Record<Provenance, number> = {
 
 export const EVIDENCE_EVENT_SCHEMA_VERSION = 2;
 
-const EventFields = {
+export const EvidenceEventSchema = z.object({
+  schemaVersion: z.literal(EVIDENCE_EVENT_SCHEMA_VERSION),
   id: EvidenceIdSchema,
   at: IsoDateTimeSchema,
   userId: UserIdSchema,
@@ -66,24 +67,18 @@ const EventFields = {
   turnIndex: z.number().int().nonnegative(),
   kind: EvidenceKindSchema,
   conceptId: ConceptIdSchema,
-  /** How much this event says about the learner */
+  provenance: ProvenanceSchema,
   confidence: UnitIntervalSchema,
   outcome: z.enum(["pass", "fail", "partial", "n/a"]).default("n/a"),
   /** Hint depth reached, when applicable. Higher depth credits less mastery */
   helpDepth: HintStepSchema.optional(),
-  /** Repo-relative file the event concerns */
+  /** Repo-relative file the event concerns. Language is derived from it */
   filePath: z.string().min(1).optional(),
-  note: z.string().optional(),
-};
-
-export const EvidenceEventSchema = z.object({
-  schemaVersion: z.literal(EVIDENCE_EVENT_SCHEMA_VERSION),
-  ...EventFields,
-  provenance: ProvenanceSchema,
-  /** The learner's own confidence before the attempt, for calibration. */
+  /** The learner's own confidence before the attempt, for calibration */
   selfConfidence: UnitIntervalSchema.optional(),
-  /** The learner's prediction of the outcome before running it. */
+  /** The learner's prediction of the outcome before running it */
   predicted: z.enum(["pass", "fail"]).optional(),
+  note: z.string().optional(),
 });
 
 export type EvidenceEvent = z.infer<typeof EvidenceEventSchema>;
@@ -99,4 +94,35 @@ export function parseEvidenceLine(raw: unknown): EvidenceEvent | null {
 
 export function evidenceWeight(event: EvidenceEvent): number {
   return PROVENANCE_WEIGHTS[event.provenance] * event.confidence;
+}
+
+const RETRACTION_PREFIX = "retract:";
+
+/** Note marking a `turn_retracted` event as annulling the given turn. */
+export function retractionNote(turnIndex: number): string {
+  return `${RETRACTION_PREFIX}${turnIndex}`;
+}
+
+/**
+ * Drops events belonging to retracted turns.
+ *
+ * A retraction is an appended event, so the log stays append-only and mastery
+ * can still be recomputed over its full history
+ */
+export function applyRetractions(events: EvidenceEvent[]): EvidenceEvent[] {
+  const retracted = new Set<string>();
+
+  for (const event of events) {
+    if (event.kind !== "turn_retracted") continue;
+    if (event.note?.startsWith(RETRACTION_PREFIX) !== true) continue;
+    retracted.add(
+      `${event.sessionId}:${event.note.slice(RETRACTION_PREFIX.length)}`,
+    );
+  }
+
+  return events.filter(
+    (event) =>
+      event.kind !== "turn_retracted" &&
+      !retracted.has(`${event.sessionId}:${event.turnIndex}`),
+  );
 }

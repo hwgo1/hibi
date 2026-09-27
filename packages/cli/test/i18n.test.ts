@@ -16,9 +16,16 @@ describe("catalogFor", () => {
   });
 
   test("every catalog defines every key", () => {
-    const keys = Object.keys(catalogFor("en"));
+    const keys = Object.keys(catalogFor("en")).sort();
+
     for (const language of ["pt", "es"]) {
-      expect(Object.keys(catalogFor(language)).sort()).toEqual(keys.sort());
+      expect(Object.keys(catalogFor(language)).sort()).toEqual(keys);
+    }
+  });
+
+  test("the confirmation word is not translated", () => {
+    for (const language of ["en", "pt", "es"]) {
+      expect(catalogFor(language).typeForget).toContain("forget");
     }
   });
 });

@@ -107,6 +107,8 @@ export class AnthropicProvider implements LLMProvider {
         if (event.type === "message_start") {
           usage = {
             inputTokens: event.message.usage.input_tokens,
+            cachedInputTokens:
+              event.message.usage.cache_read_input_tokens ?? undefined,
             outputTokens: 0,
           };
           continue;

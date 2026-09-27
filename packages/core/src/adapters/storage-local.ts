@@ -17,7 +17,7 @@ import { ConceptRegistrySchema } from "../concepts";
 import type { SessionId, UserId } from "../ids";
 import type { EvidenceQuery, Storage } from "../ports/storage";
 import type { EvidenceEvent } from "../schemas/evidence";
-import { parseEvidenceLine } from "../schemas/evidence";
+import { applyRetractions, parseEvidenceLine } from "../schemas/evidence";
 import type { LearnerModel } from "../schemas/learner";
 import { LearnerModelSchema } from "../schemas/learner";
 import type { RepoModel } from "../schemas/repo";
@@ -96,8 +96,8 @@ async function withLock<T>(lockPath: string, fn: () => Promise<T>): Promise<T> {
 
 /**
  * Reads and validates. A missing file is a normal state and returns null;
- * malformed content is not silently discarded, since losing a learner model without notice
- * is worse than failing loudly
+ * malformed content is not silently discarded, since losing a learner model
+ * without notice is worse than failing loudly
  */
 async function readJson<T>(
   path: string,
@@ -197,6 +197,37 @@ export class StorageLocal implements Storage {
   }
 
   async queryEvidence(query: EvidenceQuery): Promise<EvidenceEvent[]> {
+    const stored = await this.readAllEvents();
+    const visible = applyRetractions(stored);
+    const matched: EvidenceEvent[] = [];
+
+    for (const event of visible) {
+      if (event.userId !== query.userId) continue;
+      if (query.conceptId !== undefined && event.conceptId !== query.conceptId)
+        continue;
+      if (query.since !== undefined && event.at < query.since) continue;
+      matched.push(event);
+    }
+
+    matched.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+    return query.limit === undefined ? matched : matched.slice(-query.limit);
+  }
+
+  async clearEvidence(): Promise<void> {
+    await rm(this.evidencePath(), { force: true });
+  }
+
+  async countEvidence(): Promise<number> {
+    try {
+      const text = await readFile(this.evidencePath(), "utf8");
+      return text.split("\n").filter((line) => line.trim().length > 0).length;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+      throw error;
+    }
+  }
+
+  private async readAllEvents(): Promise<EvidenceEvent[]> {
     let text: string;
     try {
       text = await readFile(this.evidencePath(), "utf8");
@@ -218,16 +249,10 @@ export class StorageLocal implements Storage {
       }
 
       const event = parseEvidenceLine(raw);
-      if (event === null) continue;
-      if (event.userId !== query.userId) continue;
-      if (query.conceptId !== undefined && event.conceptId !== query.conceptId)
-        continue;
-      if (query.since !== undefined && event.at < query.since) continue;
-      events.push(event);
+      if (event !== null) events.push(event);
     }
 
-    events.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
-    return query.limit === undefined ? events : events.slice(-query.limit);
+    return events;
   }
 
   /** Maps session id to repo root, since sessions are stored under the repo */
