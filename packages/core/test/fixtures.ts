@@ -25,6 +25,11 @@ export function testSession(now: Date = TEST_NOW): SessionState {
     contextFiles: [],
     openQuiz: null,
     disputes: [],
+    openElicitation: null,
+    pendingPrediction: null,
+    lastElicitedTurn: null,
+    elicitationsAsked: 0,
+    consecutiveIgnored: 0,
     turnCount: 0,
   };
 }
@@ -36,7 +41,7 @@ export function testLearner(now: Date = TEST_NOW): LearnerModel {
     userId: TEST_USER,
     createdAt: at,
     updatedAt: at,
-    preferences: DEFAULT_TEACHING_PREFERENCES,
+    preferences: { ...DEFAULT_TEACHING_PREFERENCES },
     mastery: [],
     recurringErrors: [],
     inferredSignals: [],

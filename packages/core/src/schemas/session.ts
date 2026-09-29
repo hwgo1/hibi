@@ -10,6 +10,7 @@ import {
   UserIdSchema,
 } from "../ids";
 import { DisputeSchema, OpenQuizSchema } from "./quiz";
+import { OpenElicitationSchema, PendingPredictionSchema } from "./elicitation";
 
 /** Locates a snippet without relying on line numbers, which drafts as soon as the user edits above the anchor.
  * `contentHash` detects a stale anchor; `snippet` allows re-locating it
@@ -121,6 +122,11 @@ export const SessionStateSchema = z.object({
   contextFiles: z.array(z.string().min(1)).default([]),
   openQuiz: OpenQuizSchema.nullable().default(null),
   disputes: z.array(DisputeSchema).default([]),
+  openElicitation: OpenElicitationSchema.nullable().default(null),
+  pendingPrediction: PendingPredictionSchema.nullable().default(null),
+  lastElicitedTurn: z.number().int().nonnegative().nullable().default(null),
+  elicitationsAsked: z.number().int().nonnegative().default(0),
+  consecutiveIgnored: z.number().int().nonnegative().default(0),
   turnCount: z.number().int().nonnegative().default(0),
 });
 

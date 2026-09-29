@@ -25,8 +25,9 @@ export const TeachingPreferencesSchema = z.object({
 
 export type TeachingPreferences = z.infer<typeof TeachingPreferencesSchema>;
 
-export const DEFAULT_TEACHING_PREFERENCES: TeachingPreferences =
-  TeachingPreferencesSchema.parse({});
+export const DEFAULT_TEACHING_PREFERENCES: TeachingPreferences = Object.freeze(
+  TeachingPreferencesSchema.parse({}),
+);
 
 export const MASTERY_FORMULA_VERSION = 2;
 

@@ -182,6 +182,18 @@ function renderSession(session: SessionState, now: Date): string {
 
   if (lines.length === 1) lines.push(`nothing open`);
 
+  if (session.openElicitation !== null) {
+    lines.push(
+      `awaiting an answer to: "${session.openElicitation.question}" — call record_answer with their reply`,
+    );
+  }
+
+  if (session.pendingPrediction !== null) {
+    lines.push(
+      `predicted ${session.pendingPrediction.predicted} for ${session.pendingPrediction.conceptId}, outcome not yet known`,
+    );
+  }
+
   lines.push(`</session>`);
   return lines.join("\n");
 }

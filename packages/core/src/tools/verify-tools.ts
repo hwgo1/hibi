@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import type { ConceptId } from "../concepts";
+import type { PendingPrediction } from "../schemas/elicitation";
 import { classifyRun } from "../verify/classify";
 import { parseCommand, runCommand, truncateOutput } from "../verify/runner";
 import type { ToolContext } from "./context";
@@ -74,9 +76,12 @@ export const verify: Tool<ToolContext> = {
     }
 
     const intent = context.session.intents.find((i) => i.id === args.intentId);
-    const conceptId = intent?.conceptId ?? inferConcept(context);
+    const conceptId = intent?.conceptId ?? activeConcept(context);
+    let prediction: PendingPrediction | null = null;
 
     if (conceptId !== null) {
+      prediction = takePrediction(context, conceptId);
+
       const resolveIntent = context.session.intents.find(
         (i) =>
           i.kind === "resolve" &&
@@ -85,6 +90,7 @@ export const verify: Tool<ToolContext> = {
       );
 
       const at = context.clock.now().toISOString();
+
       if (resolveIntent?.kind === "resolve") {
         resolveIntent.attempts += 1;
         resolveIntent.lastTouchedAt = at;
@@ -103,20 +109,36 @@ export const verify: Tool<ToolContext> = {
         helpDepth:
           resolveIntent?.kind === "resolve" ? resolveIntent.step : undefined,
         filePath: intent?.kind === "exercise" ? intent.targetFile : undefined,
+        predicted: prediction?.predicted,
+        selfConfidence: prediction?.selfConfidence,
         note: subproject.testCommand,
       });
     }
 
-    return { content: `${report.summary}\n\n${truncateOutput(report.output)}` };
+    const surprise =
+      prediction !== null && prediction.predicted !== report.outcome
+        ? `\n\nThey predicted ${prediction.predicted} and it ${report.outcome === "pass" ? "passed" : "failed"}. Work through why their expectation was wrong before anything else — a violated expectation is when a mental model is most open to correction.`
+        : "";
+
+    return {
+      content: `${report.summary}\n\n${truncateOutput(report.output)}${surprise}`,
+    };
   },
 };
 
 /** Concept of the active intent, when the model did not name one */
-function inferConcept(
-  context: ToolContext,
-): ToolContext["session"]["intents"][number]["conceptId"] | null {
+function activeConcept(context: ToolContext): ConceptId | null {
   const active = context.session.intents.find(
     (i) => i.id === context.session.activeIntentId,
   );
   return active?.conceptId ?? null;
+}
+
+function takePrediction(
+  context: ToolContext,
+  conceptId: ConceptId,
+): PendingPrediction | null {
+  const pending = context.session.pendingPrediction;
+  context.session.pendingPrediction = null;
+  return pending !== null && pending.conceptId === conceptId ? pending : null;
 }

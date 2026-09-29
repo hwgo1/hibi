@@ -16,6 +16,7 @@ import { EVIDENCE_EVENT_SCHEMA_VERSION } from "../schemas/evidence";
 import type { LearnerModel } from "../schemas/learner";
 import { DEFAULT_TEACHING_PREFERENCES } from "../schemas/learner";
 import type { SessionState } from "../schemas/session";
+import { deriveSignals } from "../elicitation/signals";
 import type { ToolContext } from "../tools";
 import { buildToolRegistry } from "../tools";
 import type { ToolRegistry } from "../tools/registry";
@@ -260,6 +261,7 @@ export class TutorSession {
       userId: context.session.userId,
     });
     context.learner.mastery = computeMastery(context.registry, events, now);
+    context.learner.inferredSignals = deriveSignals(events, now);
     context.learner.updatedAt = at;
     await storage.saveLearnerModel(context.learner);
   }
@@ -285,6 +287,11 @@ export function newSessionState(
     contextFiles: [],
     openQuiz: null,
     disputes: [],
+    openElicitation: null,
+    pendingPrediction: null,
+    lastElicitedTurn: null,
+    elicitationsAsked: 0,
+    consecutiveIgnored: 0,
     turnCount: 0,
   };
 }

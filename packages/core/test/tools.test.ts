@@ -111,3 +111,29 @@ describe("give_hint", () => {
     ).toBe(true);
   });
 });
+
+describe("tool surface", () => {
+  test("registers every tool the rules reference", () => {
+    const names = buildToolRegistry()
+      .definitions()
+      .map((definition) => definition.name);
+
+    for (const expected of [
+      "explain_concept",
+      "demonstrate_code",
+      "propose_exercise",
+      "give_hint",
+      "ask_learner",
+      "record_answer",
+      "ask_quiz",
+      "answer_quiz",
+      "dispute_mastery",
+      "verify",
+      "list_files",
+      "read_file",
+      "record_attempt",
+    ]) {
+      expect(names).toContain(expected);
+    }
+  });
+});
