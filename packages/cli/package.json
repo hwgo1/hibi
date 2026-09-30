@@ -1,21 +1,51 @@
 {
   "name": "@hibi/cli",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
+  "description": "A programming tutor for your terminal that teaches you to write the code yourself.",
   "type": "module",
+  "license": "MIT",
   "bin": {
-    "hibi": "./src/main.tsx"
+    "hibi": "./dist/hibi.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "bun": ">=1.2.0"
+  },
+  "homepage": "(soon)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hwgo1/hibi.git",
+    "directory": "packages/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/hwgo1/hibi/issues"
+  },
+  "keywords": [
+    "tutor",
+    "learning",
+    "programming",
+    "education",
+    "cli",
+    "ai"
+  ],
+  "scripts": {
+    "build": "bun run scripts/build.ts",
+    "prepublishOnly": "bun run build"
   },
   "dependencies": {
-    "@hibi/core": "workspace:*",
-    "@hibi/daemon": "workspace:*",
     "ink": "^5.0.0",
     "ink-text-input": "^6.0.0",
-    "react": "^18.3.0",
-    "zod": "^4.0.0"
+    "react": "^18.3.0"
   },
   "devDependencies": {
+    "@hibi/core": "workspace:*",
+    "@hibi/daemon": "workspace:*",
     "@types/bun": "latest",
-    "@types/react": "^18.3.0"
+    "@types/react": "^18.3.0",
+    "zod": "^4.0.0"
   }
 }
