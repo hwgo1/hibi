@@ -163,8 +163,7 @@ export class Daemon {
       for (const raw of messages) {
         const parsed = ClientRequestSchema.safeParse(raw);
         if (!parsed.success) {
-          socket.write(encode({ type: "error", message: "malformed request" }));
-          socket.write(encode({ type: "turn_end" }));
+          this.reply(socket, { type: "error", message: "malformed request" });
           continue;
         }
         void this.handle(parsed.data, socket);
@@ -176,59 +175,56 @@ export class Daemon {
   }
 
   private async handle(request: ClientRequest, socket: Socket): Promise<void> {
-    if (request.type === "state") {
-      this.reply(socket, { type: "state", payload: this.session });
-      return;
-    }
+    switch (request.type) {
+      case "state":
+        this.reply(socket, { type: "state", payload: this.session });
+        return;
 
-    if (request.type === "profile") {
-      const learner = await this.storage.loadLearnerModel(LOCAL_USER);
-      this.reply(socket, { type: "profile", payload: learner });
-      return;
-    }
+      case "profile": {
+        const learner = await this.storage.loadLearnerModel(LOCAL_USER);
+        this.reply(socket, { type: "profile", payload: learner });
+        return;
+      }
 
-    if (request.type === "signals") {
-      const learner = await this.storage.loadLearnerModel(LOCAL_USER);
-      this.reply(socket, {
-        type: "signals",
-        payload: learner?.inferredSignals ?? [],
-      });
-      return;
-    }
+      case "signals": {
+        const learner = await this.storage.loadLearnerModel(LOCAL_USER);
+        this.reply(socket, {
+          type: "signals",
+          payload: learner?.inferredSignals ?? [],
+        });
+        return;
+      }
 
-    if (request.type === "set_preference") {
-      await this.setPreference(request.key, request.value, socket);
-      return;
-    }
+      case "set_preference":
+        await this.setPreference(request.key, request.value, socket);
+        return;
 
-    if (request.type === "undo") {
-      await this.undoLastTurn(socket);
-      return;
-    }
+      case "undo":
+        await this.undoLastTurn(socket);
+        return;
 
-    if (request.type === "forget") {
-      await this.forget(request.scope, request.value, socket);
-      return;
-    }
+      case "forget":
+        await this.forget(request.scope, request.value, socket);
+        return;
 
-    if (request.type === "clear") {
-      this.transcript = [];
-      this.reply(socket, { type: "ok", message: "conversation cleared" });
-      return;
-    }
+      case "clear":
+        this.transcript = [];
+        this.reply(socket, { type: "ok", message: "conversation cleared" });
+        return;
 
-    if (request.type === "reindex") {
-      await this.reindex(socket);
-      return;
-    }
+      case "reindex":
+        await this.reindex(socket);
+        return;
 
-    if (request.type === "shutdown") {
-      socket.write(encode({ type: "turn_end" }));
-      await this.stop();
-      return;
-    }
+      case "shutdown":
+        socket.write(encode({ type: "turn_end" }));
+        await this.stop();
+        return;
 
-    await this.queue.run(() => this.runTurn(request.text));
+      case "message":
+        await this.queue.run(() => this.runTurn(request.text));
+        return;
+    }
   }
 
   /**
@@ -418,7 +414,7 @@ export class Daemon {
           assistantText += event.text;
           this.broadcast({ type: "text", text: event.text });
         } else if (event.type === "tool") {
-          this.broadcast({ type: "tool", name: event.name });
+          this.broadcast({ type: "tool", name: event.name, args: event.args });
         } else if (event.type === "usage") {
           this.broadcast({
             type: "usage",

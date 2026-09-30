@@ -1,18 +1,18 @@
 import { describe, expect, test } from "bun:test";
 
-import { catalogFor } from "../src/i18n";
+import { catalogFor, fill } from "../src/i18n";
 
 describe("catalogFor", () => {
   test("matches by primary subtag", () => {
-    expect(catalogFor("pt-BR").opening).toBe(catalogFor("pt-PT").opening);
+    expect(catalogFor("pt-BR").greeting).toBe(catalogFor("pt-PT").greeting);
   });
 
   test("is case-insensitive", () => {
-    expect(catalogFor("PT-br").opening).toBe(catalogFor("pt").opening);
+    expect(catalogFor("PT-br").greeting).toBe(catalogFor("pt").greeting);
   });
 
   test("falls back to English for an unknown language", () => {
-    expect(catalogFor("ja").opening).toBe(catalogFor("en").opening);
+    expect(catalogFor("ja").greeting).toBe(catalogFor("en").greeting);
   });
 
   test("every catalog defines every key", () => {
@@ -23,9 +23,29 @@ describe("catalogFor", () => {
     }
   });
 
-  test("the confirmation word is not translated", () => {
+  test("the confirmation word is the same in every language", () => {
     for (const language of ["en", "pt", "es"]) {
-      expect(catalogFor(language).typeForget).toContain("forget");
+      expect(catalogFor(language).forgetWarning).toContain(
+        "/forget all forget",
+      );
     }
+  });
+
+  test("the loader says thinking in the learner's language", () => {
+    expect(catalogFor("pt-BR").thinking).toBe("pensando");
+  });
+});
+
+describe("fill", () => {
+  test("replaces a placeholder", () => {
+    expect(fill("Oi, {name}.", { name: "Hugo" })).toBe("Oi, Hugo.");
+  });
+
+  test("leaves an unknown placeholder as written", () => {
+    expect(fill("dica {step} de 3", {})).toBe("dica {step} de 3");
+  });
+
+  test("replaces every occurrence", () => {
+    expect(fill("{a} e {a}", { a: "x" })).toBe("x e x");
   });
 });

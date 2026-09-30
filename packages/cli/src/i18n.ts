@@ -1,79 +1,184 @@
 type StringKey =
-  | "opening"
+  | "greeting"
+  | "greetingNamed"
   | "resuming"
-  | "notIndexed"
-  | "repoLabel"
+  | "hint"
+  | "weakModel"
   | "starting"
+  | "thinking"
+  | "hintOf"
+  | "unknownCommand"
   | "noProfile"
   | "changeWith"
   | "restartNeeded"
-  | "confirmReset"
   | "forgetWarning"
-  | "typeForget";
+  | "onboardIntro"
+  | "onboardIntroDetail"
+  | "stepLanguage"
+  | "languageConfirm"
+  | "stepName"
+  | "namePrompt"
+  | "stepKey"
+  | "keyExplain"
+  | "providerPrompt"
+  | "choosePrompt"
+  | "keyWhere"
+  | "keyPrompt"
+  | "keyRequired"
+  | "keyChecking"
+  | "keyOk"
+  | "keyInvalid"
+  | "keyFailed"
+  | "keySaved"
+  | "ready";
 
 type Catalog = Record<StringKey, string>;
 
 /**
- * Fixed CLI strings, by language. Keys are matched by primary subtag, so "pt-BR"
- * and "pt-PT" share an entry. English is the fallback for any language with no catalog.
+ * Every fixed string the CLI shows, by language. Written for someone who may
+ * never have programmed: no jargon without a plain explanation next to it.
+ *
+ * Placeholders in braces are filled with `fill`. Command names stay in English
+ * in every language, since they are typed rather than read.
  */
 const CATALOGS: Record<string, Catalog> = {
   en: {
-    opening:
-      "Want an exercise, or would you rather I look at something you already wrote?",
-    resuming: "Picking up where you left off:",
-    notIndexed:
-      "not indexed yet — I can still read your files, just slower to orient",
-    repoLabel: "repo",
-    starting: "starting daemon…",
-    noProfile: "no profile yet",
-    changeWith: "change with: /prefs <key> <value>",
-    restartNeeded: "saved — restart hibi for it to take effect",
-    confirmReset: "remove stored credentials?",
+    greeting: "Hi! What do you want to learn today?",
+    greetingNamed: "Hi, {name}. What do you want to learn today?",
+    resuming: "Last time you were working on: {goal}.",
+    hint: "Write however you like, ask for an exercise, or type /help.",
+    weakModel:
+      "The {model} model sometimes hands over the full answer. To learn better, use the recommended one: /model",
+    starting: "starting…",
+    thinking: "thinking",
+    hintOf: "hint {step} of 3",
+    unknownCommand:
+      "I don't know that command. Type /help to see the ones that exist.",
+    noProfile: "There's no profile yet.",
+    changeWith: "To change one: /prefs <name> <value>",
+    restartNeeded: "Saved. Close and reopen hibi for it to take effect.",
     forgetWarning:
-      "this permanently deletes your entire learning history and cannot be undone",
-    typeForget: "type 'forget' to confirm:",
+      "This permanently deletes your whole learning history.\nTo confirm, type: /forget all forget",
+    onboardIntro: "Hi! I'm hibi, a programming tutor.",
+    onboardIntroDetail:
+      "I help you actually learn: I explain, suggest exercises and give hints,\nwithout handing over the answer. Before we start, I need a few things.",
+    stepLanguage: "Language",
+    languageConfirm:
+      "I'll speak {language}. Press Enter to confirm, or type another (pt, es):",
+    stepName: "Name",
+    namePrompt: "What should I call you? (Enter to skip)",
+    stepKey: "Access key",
+    keyExplain:
+      "hibi runs on another company's artificial intelligence, which charges per use —\nusually a few cents per question. You create a key on their site and paste it\nhere; the cost goes straight to your account.",
+    providerPrompt: "Which company do you want to use?",
+    choosePrompt: "Choose [1]:",
+    keyWhere: "Create your key at: {url}",
+    keyPrompt: "Paste the key here:",
+    keyRequired: "I need the key to continue.",
+    keyChecking: "Testing the key…",
+    keyOk: "it works!",
+    keyInvalid: "the key was refused. Check that you copied all of it.",
+    keyFailed: "it didn't work ({reason}).",
+    keySaved: "It's stored only on your computer.",
+    ready: "All set.",
   },
   pt: {
-    opening:
-      "Quer um exercício, ou prefere que eu olhe algo que você já escreveu?",
-    resuming: "Retomando de onde parou:",
-    notIndexed:
-      "ainda não indexado — consigo ler seus arquivos, só demoro mais pra me situar",
-    repoLabel: "repo",
-    starting: "iniciando daemon…",
-    noProfile: "nenhum perfil ainda",
-    changeWith: "mude com: /prefs <chave> <valor>",
-    restartNeeded: "salvo — reinicie o hibi para valer",
-    confirmReset: "remover as credenciais salvas?",
+    greeting: "Oi! O que você quer aprender hoje?",
+    greetingNamed: "Oi, {name}. O que você quer aprender hoje?",
+    resuming: "Da última vez você estava em: {goal}.",
+    hint: "Escreva do seu jeito, peça um exercício, ou digite /help.",
+    weakModel:
+      "O modelo {model} às vezes entrega a resposta pronta. Para aprender melhor, use o recomendado: /model",
+    starting: "iniciando…",
+    thinking: "pensando",
+    hintOf: "dica {step} de 3",
+    unknownCommand:
+      "Não conheço esse comando. Digite /help para ver os que existem.",
+    noProfile: "Ainda não há perfil.",
+    changeWith: "Para mudar: /prefs <nome> <valor>",
+    restartNeeded: "Salvo. Feche e abra o hibi de novo para valer.",
     forgetWarning:
-      "isso apaga todo o seu histórico de aprendizado e não tem volta",
-    typeForget: "digite 'forget' para confirmar:",
+      "Isso apaga todo o seu histórico de aprendizado, sem volta.\nPara confirmar, digite: /forget all forget",
+    onboardIntro: "Oi! Eu sou o hibi, um tutor de programação.",
+    onboardIntroDetail:
+      "Eu te ajudo a aprender de verdade: explico, proponho exercícios e dou dicas,\nsem entregar a resposta pronta. Antes de começar, preciso de algumas coisas.",
+    stepLanguage: "Idioma",
+    languageConfirm:
+      "Vou falar em {language}. Enter para confirmar, ou digite outro (en, es):",
+    stepName: "Nome",
+    namePrompt: "Como posso te chamar? (Enter para pular)",
+    stepKey: "Chave de acesso",
+    keyExplain:
+      "O hibi funciona com a inteligência artificial de outra empresa, que cobra por uso —\nnormalmente alguns centavos por pergunta. Você cria uma chave no site dela e\ncola aqui; o custo vai direto para a sua conta.",
+    providerPrompt: "Qual empresa você quer usar?",
+    choosePrompt: "Escolha [1]:",
+    keyWhere: "Crie sua chave em: {url}",
+    keyPrompt: "Cole a chave aqui:",
+    keyRequired: "Preciso da chave para continuar.",
+    keyChecking: "Testando a chave…",
+    keyOk: "funcionou!",
+    keyInvalid: "a chave foi recusada. Confira se você copiou ela inteira.",
+    keyFailed: "não funcionou ({reason}).",
+    keySaved: "Ela fica guardada só no seu computador.",
+    ready: "Tudo pronto.",
   },
   es: {
-    opening:
-      "¿Quieres un ejercicio, o prefieres que mire algo que ya escribiste?",
-    resuming: "Retomando donde lo dejaste:",
-    notIndexed:
-      "aún sin indexar — puedo leer tus archivos, solo tardo más en orientarme",
-    repoLabel: "repo",
-    starting: "iniciando daemon…",
-    noProfile: "aún no hay perfil",
-    changeWith: "cambia con: /prefs <clave> <valor>",
-    restartNeeded: "guardado — reinicia hibi para aplicarlo",
-    confirmReset: "¿eliminar las credenciales guardadas?",
+    greeting: "¡Hola! ¿Qué quieres aprender hoy?",
+    greetingNamed: "Hola, {name}. ¿Qué quieres aprender hoy?",
+    resuming: "La última vez estabas en: {goal}.",
+    hint: "Escribe como quieras, pide un ejercicio, o escribe /help.",
+    weakModel:
+      "El modelo {model} a veces entrega la respuesta completa. Para aprender mejor, usa el recomendado: /model",
+    starting: "iniciando…",
+    thinking: "pensando",
+    hintOf: "pista {step} de 3",
+    unknownCommand:
+      "No conozco ese comando. Escribe /help para ver los que existen.",
+    noProfile: "Todavía no hay perfil.",
+    changeWith: "Para cambiarlo: /prefs <nombre> <valor>",
+    restartNeeded: "Guardado. Cierra y vuelve a abrir hibi para aplicarlo.",
     forgetWarning:
-      "esto borra todo tu historial de aprendizaje y no se puede deshacer",
-    typeForget: "escribe 'forget' para confirmar:",
+      "Esto borra todo tu historial de aprendizaje, sin vuelta atrás.\nPara confirmar, escribe: /forget all forget",
+    onboardIntro: "¡Hola! Soy hibi, un tutor de programación.",
+    onboardIntroDetail:
+      "Te ayudo a aprender de verdad: explico, propongo ejercicios y doy pistas,\nsin entregar la respuesta. Antes de empezar, necesito algunas cosas.",
+    stepLanguage: "Idioma",
+    languageConfirm:
+      "Voy a hablar en {language}. Enter para confirmar, o escribe otro (en, pt):",
+    stepName: "Nombre",
+    namePrompt: "¿Cómo te llamo? (Enter para saltar)",
+    stepKey: "Clave de acceso",
+    keyExplain:
+      "hibi funciona con la inteligencia artificial de otra empresa, que cobra por uso —\nnormalmente unos céntimos por pregunta. Creas una clave en su sitio y la pegas\naquí; el costo va directo a tu cuenta.",
+    providerPrompt: "¿Qué empresa quieres usar?",
+    choosePrompt: "Elige [1]:",
+    keyWhere: "Crea tu clave en: {url}",
+    keyPrompt: "Pega la clave aquí:",
+    keyRequired: "Necesito la clave para continuar.",
+    keyChecking: "Probando la clave…",
+    keyOk: "¡funciona!",
+    keyInvalid: "la clave fue rechazada. Revisa que la copiaste completa.",
+    keyFailed: "no funcionó ({reason}).",
+    keySaved: "Queda guardada solo en tu computadora.",
+    ready: "Todo listo.",
   },
 };
 
 const FALLBACK = CATALOGS["en"]!;
+const PLACEHOLDER = /\{(\w+)\}/g;
 
-/** Resolves a catalog from a BCP-47 tag, falling back to English. */
+/** Resolves a catalog from a BCP-47 tag by primary subtag, falling back to English. */
 export function catalogFor(language: string): Catalog {
   const primary = language.toLowerCase().split("-")[0] ?? "en";
   return CATALOGS[primary] ?? FALLBACK;
+}
+
+/** Replaces `{name}` placeholders. Unknown placeholders are left as written. */
+export function fill(template: string, values: Record<string, string>): string {
+  return template.replace(
+    PLACEHOLDER,
+    (match, key: string) => values[key] ?? match,
+  );
 }
 
 export type { Catalog, StringKey };

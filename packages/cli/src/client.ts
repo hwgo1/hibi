@@ -7,10 +7,12 @@ import {
   type ServerEvent,
 } from "@hibi/daemon";
 
+export type EventHandler = (event: ServerEvent) => void;
+
 export class DaemonClient {
   private socket: Socket | null = null;
   private buffer = "";
-  private handler: ((event: ServerEvent) => void) | null = null;
+  private handler: EventHandler | null = null;
 
   async connect(path: string): Promise<void> {
     await new Promise<void>((resolve, reject) => {
@@ -31,8 +33,14 @@ export class DaemonClient {
     });
   }
 
-  onEvent(handler: (event: ServerEvent) => void): void {
+  onEvent(handler: EventHandler): void {
     this.handler = handler;
+  }
+
+  takeHandler(): EventHandler | null {
+    const previous = this.handler;
+    this.handler = null;
+    return previous;
   }
 
   send(request: ClientRequest): void {
@@ -42,6 +50,7 @@ export class DaemonClient {
   async sendAndWait(request: ClientRequest): Promise<void> {
     return new Promise((resolve) => {
       const previous = this.handler;
+
       this.handler = (event) => {
         previous?.(event);
         if (event.type === "turn_end") {
@@ -49,6 +58,7 @@ export class DaemonClient {
           resolve();
         }
       };
+
       this.send(request);
     });
   }

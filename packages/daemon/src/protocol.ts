@@ -29,7 +29,7 @@ export type ClientRequest = z.infer<typeof ClientRequestSchema>;
 
 export type ServerEvent =
   | { type: "text"; text: string }
-  | { type: "tool"; name: string }
+  | { type: "tool"; name: string; args?: unknown }
   | { type: "step"; step: 1 | 2 | 3 }
   | {
       type: "usage";

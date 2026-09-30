@@ -1,5 +1,6 @@
 import type { ConceptRegistry } from "../concepts";
 import { seedRegistry } from "../concepts";
+import { deriveSignals } from "../elicitation/signals";
 import type { EvidenceId, SessionId, UserId } from "../ids";
 import type {
   LLMProvider,
@@ -16,7 +17,6 @@ import { EVIDENCE_EVENT_SCHEMA_VERSION } from "../schemas/evidence";
 import type { LearnerModel } from "../schemas/learner";
 import { DEFAULT_TEACHING_PREFERENCES } from "../schemas/learner";
 import type { SessionState } from "../schemas/session";
-import { deriveSignals } from "../elicitation/signals";
 import type { ToolContext } from "../tools";
 import { buildToolRegistry } from "../tools";
 import type { ToolRegistry } from "../tools/registry";
@@ -26,11 +26,12 @@ const MAX_TOOL_ROUNDS = 5;
 const MAX_TOKENS = 4096;
 const MAX_RETRIES = 2;
 const RETRY_BASE_MS = 500;
+
 const TRANSCRIPT_WINDOW = 6;
 
 export type TurnEvent =
   | { type: "text"; text: string }
-  | { type: "tool"; name: string }
+  | { type: "tool"; name: string; args: unknown }
   | { type: "usage"; usage: TokenUsage; model: string }
   | { type: "error"; message: string };
 
@@ -105,6 +106,9 @@ export class TutorSession {
       if (result.usage !== null) {
         turnUsage = {
           inputTokens: turnUsage.inputTokens + result.usage.inputTokens,
+          cachedInputTokens:
+            (turnUsage.cachedInputTokens ?? 0) +
+            (result.usage.cachedInputTokens ?? 0),
           outputTokens: turnUsage.outputTokens + result.usage.outputTokens,
         };
       }
@@ -124,7 +128,7 @@ export class TutorSession {
 
       const results: ToolResult[] = [];
       for (const call of result.toolCalls) {
-        yield { type: "tool", name: call.name };
+        yield { type: "tool", name: call.name, args: call.arguments };
         const outcome = await this.tools.execute(
           call.name,
           call.arguments,
@@ -256,7 +260,11 @@ export class TutorSession {
         event.kind === "quiz_answered" ||
         event.kind === "self_assessment",
     );
-    if (!changesMastery) return;
+
+    if (!changesMastery) {
+      await storage.saveLearnerModel(context.learner);
+      return;
+    }
 
     const events = await storage.queryEvidence({
       userId: context.session.userId,

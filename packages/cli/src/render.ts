@@ -16,8 +16,6 @@ export const ui = {
   fox: (text: string) => paint(ANSI.fox, text),
   dim: (text: string) => paint(ANSI.dim, text),
   bold: (text: string) => paint(ANSI.bold, text),
-  prompt: () => (SUPPORTS_COLOR ? `${ANSI.fox}❯${ANSI.reset} ` : "> "),
-  step: (step: number) => paint(ANSI.fox, `[step ${step}/3]`),
 };
 
 export function banner(model: string, repoRoot: string): string {
