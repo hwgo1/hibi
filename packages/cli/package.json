@@ -1,5 +1,5 @@
 {
-  "name": "@hibi/cli",
+  "name": "@hwgo1/hibi",
   "version": "0.1.0",
   "description": "A programming tutor for your terminal that teaches you to write the code yourself.",
   "type": "module",

@@ -15,7 +15,7 @@ hibi is built for that learning case. When you get stuck, it points to where the
 You need [Bun](https://bun.sh) 1.2 or newer and an API key from OpenAI or Anthropic. git is optional, but without it hibi can't tell the code you wrote from code that came with a template.
 
 ```bash
-bun install -g @hibi/cli
+bun install -g @hwgo1/hibi
 ```
 
 Then open any project and run it:
