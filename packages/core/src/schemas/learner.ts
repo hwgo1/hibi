@@ -7,6 +7,7 @@ import {
   UnitIntervalSchema,
   UserIdSchema,
 } from "../ids";
+import { GoalSchema } from "./goal";
 
 /**
  * Settings the user declared explicitly. They configure how the tutor
@@ -80,6 +81,7 @@ export const LearnerModelSchema = z.object({
   createdAt: IsoDateTimeSchema,
   updatedAt: IsoDateTimeSchema,
   preferences: TeachingPreferencesSchema,
+  goal: GoalSchema.nullable().default(null),
   mastery: z.array(MasteryEntrySchema).default([]),
   recurringErrors: z.array(RecurringErrorSchema).default([]),
   inferredSignals: z.array(InferredSignalSchema).default([]),

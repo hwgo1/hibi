@@ -82,7 +82,18 @@ export function formatState(session: SessionState): string {
 }
 
 export function formatProfile(learner: LearnerModel): string {
-  const lines = [ui.bold("preferences")];
+  const lines: string[] = [];
+
+  if (learner.goal !== null && learner.goal.status === "active") {
+    lines.push(ui.bold("working toward"));
+    lines.push(`  ${learner.goal.statement}`);
+    if (learner.goal.skipped.length > 0) {
+      lines.push(ui.dim(`  skipped: ${learner.goal.skipped.join(", ")}`));
+    }
+    lines.push("");
+  }
+
+  lines.push(ui.bold("preferences"));
 
   for (const [key, value] of Object.entries(learner.preferences)) {
     lines.push(`  ${key} = ${value === "" ? ui.dim("(unset)") : value}`);

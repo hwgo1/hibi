@@ -107,12 +107,17 @@ async function ensureDaemon(
   }
 }
 
-function opening(strings: Catalog, repoRoot: string, indexed: boolean): string {
+function opening(
+  strings: Catalog,
+  repoRoot: string,
+  indexed: boolean,
+  goal: string | null,
+): string {
   const lines = [
     ui.dim(`${strings.repoLabel}: ${repoRoot}`),
     indexed ? "" : ui.dim(strings.notIndexed),
     "",
-    strings.opening,
+    goal === null ? strings.opening : `${strings.resuming} ${goal}`,
     "",
   ];
   return lines.filter((line) => line.length > 0).join("\n");
@@ -142,6 +147,11 @@ async function chat(repoRoot: string): Promise<void> {
 
   const client = await ensureDaemon(repoRoot, strings);
   const indexed = (await storage.loadRepoModel(repoRoot)) !== null;
+
+  const activeGoal =
+    learner?.goal !== null && learner?.goal?.status === "active"
+      ? learner.goal.statement
+      : null;
 
   let spend: SessionSpend = emptySpend();
   let showRaw = false;
@@ -212,7 +222,7 @@ async function chat(repoRoot: string): Promise<void> {
   });
 
   stdout.write(`\n${banner(provider.model, repoRoot)}`);
-  stdout.write(`${opening(strings, repoRoot, indexed)}\n`);
+  stdout.write(`${opening(strings, repoRoot, indexed, activeGoal)}\n`);
 
   for (;;) {
     let line: string;

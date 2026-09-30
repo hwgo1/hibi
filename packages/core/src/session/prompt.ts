@@ -66,6 +66,15 @@ function renderLearner(learner: LearnerModel): string {
     `explanation style: ${p.explanationStyle}`,
   );
 
+  if (learner.goal !== null && learner.goal.status === "active") {
+    const goal = learner.goal;
+    lines.push(`working toward: ${goal.statement}`);
+    if (goal.language !== undefined) lines.push(`language: ${goal.language}`);
+    if (goal.skipped.length > 0) {
+      lines.push(`says they already know: ${goal.skipped.join(", ")}`);
+    }
+  }
+
   const mastery = topMastery(learner.mastery);
   if (mastery.length > 0) {
     lines.push(`mastery:`);

@@ -120,6 +120,7 @@ async function setupProfile(rl: Interface, home: string): Promise<void> {
       language: language.length > 0 ? language : detected,
       name: name.slice(0, MAX_NAME_LENGTH),
     },
+    goal: null,
     mastery: [],
     recurringErrors: [],
     inferredSignals: [],

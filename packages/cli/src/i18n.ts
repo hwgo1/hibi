@@ -1,5 +1,6 @@
 type StringKey =
   | "opening"
+  | "resuming"
   | "notIndexed"
   | "repoLabel"
   | "starting"
@@ -20,6 +21,7 @@ const CATALOGS: Record<string, Catalog> = {
   en: {
     opening:
       "Want an exercise, or would you rather I look at something you already wrote?",
+    resuming: "Picking up where you left off:",
     notIndexed:
       "not indexed yet — I can still read your files, just slower to orient",
     repoLabel: "repo",
@@ -35,6 +37,7 @@ const CATALOGS: Record<string, Catalog> = {
   pt: {
     opening:
       "Quer um exercício, ou prefere que eu olhe algo que você já escreveu?",
+    resuming: "Retomando de onde parou:",
     notIndexed:
       "ainda não indexado — consigo ler seus arquivos, só demoro mais pra me situar",
     repoLabel: "repo",
@@ -50,6 +53,7 @@ const CATALOGS: Record<string, Catalog> = {
   es: {
     opening:
       "¿Quieres un ejercicio, o prefieres que mire algo que ya escribiste?",
+    resuming: "Retomando donde lo dejaste:",
     notIndexed:
       "aún sin indexar — puedo leer tus archivos, solo tardo más en orientarme",
     repoLabel: "repo",
@@ -66,7 +70,7 @@ const CATALOGS: Record<string, Catalog> = {
 
 const FALLBACK = CATALOGS["en"]!;
 
-/** Resolves a catalog from a BCP-47 tag, falling back to English */
+/** Resolves a catalog from a BCP-47 tag, falling back to English. */
 export function catalogFor(language: string): Catalog {
   const primary = language.toLowerCase().split("-")[0] ?? "en";
   return CATALOGS[primary] ?? FALLBACK;

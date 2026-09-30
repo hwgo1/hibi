@@ -31,3 +31,6 @@ export * from "./elicitation/calibration";
 export * from "./elicitation/signals";
 export * from "./schemas/quiz";
 export * from "./quiz/scoring";
+export * from "./schemas/goal";
+export * from "./goal/next-steps";
+export * from "./goal/language";
