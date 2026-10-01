@@ -1,8 +1,19 @@
-# hibi 日々
+<div>
+
+<h1 style="display: flex; justify-content: center; gap: 10px;">
+  <img src="./site/public/assets/fox-lying.png" width="60">
+  hibi 日々
+</h1>
+
+</div>
 
 A programming tutor that runs in your terminal, reads the project you're working on, and teaches you to write the code yourself.
 
-Full documentation at (soon).
+[![Status](https://img.shields.io/badge/status-experimental-8b7cf6?style=flat-square)](https://hibi-4xc.pages.dev/)
+[![Bun](https://img.shields.io/badge/Bun-1.2%2B-000000?style=flat-square&logo=bun&logoColor=white)](https://bun.sh/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+
+Full documentation [here](https://hibi-4xc.pages.dev/)!
 
 ## Why hibi exists
 
@@ -52,4 +63,4 @@ A small background process per project holds the session, and the terminal inter
 
 ## Status
 
-hibi is at 0.1 and experimental. It isn't published to npm yet, the terminal is the only interface, and the thresholds that decide when a hint escalates are first guesses that haven't been tested with other learners. If hibi helps you too early or too late, open an issue and say which exercise it was.
+hibi is at 0.1 and experimental. The terminal is the only interface, and the thresholds that decide when a hint escalates are first guesses that haven't been tested with other learners. If hibi helps you too early or too late, open an issue and say which exercise it was.
