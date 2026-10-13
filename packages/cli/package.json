@@ -44,7 +44,6 @@
   "devDependencies": {
     "@hibi/core": "workspace:*",
     "@hibi/daemon": "workspace:*",
-    "@types/bun": "latest",
     "@types/react": "^18.3.0",
     "zod": "^4.0.0"
   }

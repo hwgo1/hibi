@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { parseBlocks } from "../src/ui/parse-markdown";
+import { glyphs } from "../src/ui/theme";
 
 describe("parseBlocks", () => {
   test("separates fenced code from prose", () => {
@@ -47,7 +48,7 @@ describe("parseBlocks", () => {
     const blocks = parseBlocks("- first\n- second");
 
     expect(blocks[0]?.lines).toHaveLength(2);
-    expect(blocks[0]?.lines[0]?.[0]?.text.trim()).toBe("·");
+    expect(blocks[0]?.lines[0]?.[0]?.text.trim()).toBe(glyphs.bullet);
   });
 
   test("survives an unclosed fence mid-stream", () => {
