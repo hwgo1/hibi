@@ -18,7 +18,6 @@ export const ConceptSchema = z.object({
   requires: z.array(ConceptIdSchema).optional(),
   source: ConceptSourceSchema,
   createdAt: IsoDateTimeSchema,
-  mergedInto: ConceptIdSchema.nullable().default(null),
 });
 
 export type Concept = z.infer<typeof ConceptSchema>;
@@ -97,7 +96,6 @@ export function seedRegistry(now: Date): ConceptRegistry {
       parentId: (c.parentId as ConceptId | null) ?? null,
       source: "seed" as const,
       createdAt: at,
-      mergedInto: null,
     })),
   };
 }

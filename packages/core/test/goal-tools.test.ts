@@ -39,7 +39,6 @@ describe("set_goal", () => {
       parentId: "concurrency" as ConceptId,
       source: "proposed",
       createdAt: TEST_NOW.toISOString(),
-      mergedInto: null,
     });
 
     const result = await buildToolRegistry().execute(

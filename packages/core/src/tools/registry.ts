@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import type { ToolDefinition } from "../ports/llm";
 
 export interface Tool<C> {
@@ -8,6 +10,43 @@ export interface Tool<C> {
 export interface ToolOutcome {
   content: string;
   isError?: boolean;
+}
+
+export interface ToolSpec<C, S extends z.ZodObject> {
+  name: string;
+  description: string;
+  args: S;
+  execute(args: z.output<S>, context: C): Promise<ToolOutcome>;
+}
+
+/** The zod schema is the only source: the model sees its JSON Schema, and calls are parsed against it once */
+export function defineTool<C, S extends z.ZodObject>(
+  spec: ToolSpec<C, S>,
+): Tool<C> {
+  return {
+    definition: {
+      name: spec.name,
+      description: spec.description,
+      parameters: toParameters(spec.args),
+    },
+    async execute(rawArgs, context) {
+      const parsed = spec.args.safeParse(rawArgs ?? {});
+      if (!parsed.success) {
+        return {
+          content: `invalid arguments: ${z.prettifyError(parsed.error)}`,
+          isError: true,
+        };
+      }
+      return spec.execute(parsed.data, context);
+    },
+  };
+}
+
+export function toParameters(schema: z.ZodObject): Record<string, unknown> {
+  const { $schema: _, ...parameters } = z.toJSONSchema(schema, {
+    io: "input",
+  });
+  return parameters;
 }
 
 export class ToolRegistry<C> {

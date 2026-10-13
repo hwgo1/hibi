@@ -32,7 +32,7 @@ export const NextStepSchema = z.object({
   conceptId: ConceptIdSchema,
   level: UnitIntervalSchema,
   confidence: UnitIntervalSchema,
-  reason: z.enum(["untouched", "weak", "stale", "unverified"]),
+  reason: z.enum(["untouched", "seen", "weak", "stale", "unverified"]),
 });
 
 export type NextStep = z.infer<typeof NextStepSchema>;

@@ -7,8 +7,9 @@ import {
 } from "../src/concepts";
 import {
   ancestors,
-  canonical,
   depth,
+  findConcept,
+  indexConcepts,
   normalizeTerm,
   resolveConcept,
 } from "../src/concept-resolver";
@@ -31,7 +32,6 @@ function concept(
     parentId: null,
     source: "proposed",
     createdAt: NOW.toISOString(),
-    mergedInto: null,
     ...overrides,
   };
 }
@@ -76,10 +76,10 @@ describe("resolveConcept", () => {
     expect(result.concept.id).toBe("linked-list" as ConceptId);
   });
 
-  test("creates an unrelated term under the suggested parent", () => {
+  test("creates an unrelated term under the suggested parent, normalizing it", () => {
     const registry = seedRegistry(NOW);
     const result = resolveConcept(registry, "goroutines", {
-      parentHint: "concurrency" as ConceptId,
+      parentTerm: "Concurrency",
       now: NOW,
     });
 
@@ -97,37 +97,29 @@ describe("resolveConcept", () => {
     expect(registry.concepts).toHaveLength(before);
   });
 
-  test("ignores merged concepts when matching", () => {
-    const registry = withConcepts([
-      concept("hashmap", { mergedInto: "hash-table" as ConceptId }),
-      concept("hash-table"),
-    ]);
-    const result = resolveConcept(registry, "hashmap", { now: NOW });
+  test("an ambiguous term returns the candidates instead of creating", () => {
+    const registry = withConcepts([concept("hash-map"), concept("hash-set")]);
+    const result = resolveConcept(registry, "hash mapping", { now: NOW });
 
-    expect(result.status).not.toBe("matched");
+    expect(result.status).toBe("ambiguous");
+    if (result.status !== "ambiguous") return;
+    expect(result.candidates.map((c) => c.id)).toContain(
+      "hash-map" as ConceptId,
+    );
   });
 });
 
-describe("canonical", () => {
-  test("follows a chain of merges to the survivor", () => {
-    const registry = withConcepts([
-      concept("a", { mergedInto: "b" as ConceptId }),
-      concept("b", { mergedInto: "c" as ConceptId }),
-      concept("c"),
-    ]);
-    expect(canonical(registry, "a" as ConceptId)?.id).toBe("c" as ConceptId);
+describe("findConcept", () => {
+  test("matches regardless of case", () => {
+    expect(findConcept(seedRegistry(NOW), "Concurrency")?.id).toBe(
+      "concurrency" as ConceptId,
+    );
   });
 
-  test("terminates on a merge cycle instead of looping forever", () => {
-    const registry = withConcepts([
-      concept("a", { mergedInto: "b" as ConceptId }),
-      concept("b", { mergedInto: "a" as ConceptId }),
-    ]);
-    expect(canonical(registry, "a" as ConceptId)).not.toBeNull();
-  });
-
-  test("returns null for an unknown id", () => {
-    expect(canonical(seedRegistry(NOW), "nope" as ConceptId)).toBeNull();
+  test("never creates a concept", () => {
+    const registry = seedRegistry(NOW);
+    expect(findConcept(registry, "goroutines")).toBeUndefined();
+    expect(registry.concepts).toHaveLength(seedRegistry(NOW).concepts.length);
   });
 });
 
@@ -136,9 +128,10 @@ describe("ancestors", () => {
     const registry = withConcepts([
       concept("goroutines", { parentId: "concurrency" as ConceptId }),
     ]);
-    const chain = ancestors(registry, "goroutines" as ConceptId).map(
-      (c) => c.id,
-    );
+    const chain = ancestors(
+      indexConcepts(registry),
+      "goroutines" as ConceptId,
+    ).map((c) => c.id);
     expect(chain).toEqual([
       "concurrency",
       "programming-fundamentals",
@@ -146,7 +139,9 @@ describe("ancestors", () => {
   });
 
   test("returns empty for a root", () => {
-    expect(ancestors(seedRegistry(NOW), "backend" as ConceptId)).toEqual([]);
+    expect(
+      ancestors(indexConcepts(seedRegistry(NOW)), "backend" as ConceptId),
+    ).toEqual([]);
   });
 
   test("terminates on a parent cycle", () => {
@@ -154,7 +149,9 @@ describe("ancestors", () => {
       concept("a", { parentId: "b" as ConceptId }),
       concept("b", { parentId: "a" as ConceptId }),
     ]);
-    expect(ancestors(registry, "a" as ConceptId).length).toBeLessThan(5);
+    expect(
+      ancestors(indexConcepts(registry), "a" as ConceptId).length,
+    ).toBeLessThan(5);
   });
 });
 
@@ -165,10 +162,10 @@ describe("parent rules", () => {
       concept("l2", { parentId: "l1" as ConceptId }),
       concept("l3", { parentId: "l2" as ConceptId }),
     ]);
-    expect(depth(registry, "l3" as ConceptId)).toBe(3);
+    expect(depth(indexConcepts(registry), "l3" as ConceptId)).toBe(3);
 
     const result = resolveConcept(registry, "very-deep-topic", {
-      parentHint: "l3" as ConceptId,
+      parentTerm: "l3",
       now: NOW,
     });
 
@@ -177,9 +174,9 @@ describe("parent rules", () => {
     expect(result.concept.parentId).toBe("l2" as ConceptId);
   });
 
-  test("an unknown parent hint produces a root, not a broken reference", () => {
+  test("an unknown parent term produces a root, not a broken reference", () => {
     const result = resolveConcept(seedRegistry(NOW), "orphan-topic", {
-      parentHint: "does-not-exist" as ConceptId,
+      parentTerm: "does-not-exist",
       now: NOW,
     });
 

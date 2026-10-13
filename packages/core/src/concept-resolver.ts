@@ -55,49 +55,31 @@ export function validateConceptTerm(term: string): string | null {
   return null;
 }
 
-/** Follows merge pointers to the surviving concept */
-export function canonical(
-  registry: ConceptRegistry,
-  id: ConceptId,
-): Concept | null {
-  const seen = new Set<string>();
-  let current = registry.concepts.find((c) => c.id === id) ?? null;
+export type ConceptIndex = ReadonlyMap<string, Concept>;
 
-  while (
-    current !== null &&
-    current.mergedInto !== null &&
-    !seen.has(current.id)
-  ) {
-    seen.add(current.id);
-    const next = current.mergedInto;
-    current = registry.concepts.find((c) => c.id === next) ?? null;
-  }
-  return current;
+export function indexConcepts(registry: ConceptRegistry): ConceptIndex {
+  return new Map(registry.concepts.map((concept) => [concept.id, concept]));
 }
 
 /** Walks parent links, nearest first, for mastery roll-up */
-export function ancestors(registry: ConceptRegistry, id: ConceptId): Concept[] {
+export function ancestors(index: ConceptIndex, id: ConceptId): Concept[] {
   const chain: Concept[] = [];
-  const seen = new Set<string>();
-  let current = canonical(registry, id);
+  const seen = new Set<string>([id]);
+  let parentId = index.get(id)?.parentId ?? null;
 
-  while (
-    current !== null &&
-    current.parentId !== null &&
-    !seen.has(current.id)
-  ) {
-    seen.add(current.id);
-    const parent = canonical(registry, current.parentId);
-    if (parent === null) break;
+  while (parentId !== null && !seen.has(parentId)) {
+    const parent = index.get(parentId);
+    if (parent === undefined) break;
+    seen.add(parent.id);
     chain.push(parent);
-    current = parent;
+    parentId = parent.parentId;
   }
   return chain;
 }
 
 /** Distance from a root. A root is depth 0 */
-export function depth(registry: ConceptRegistry, id: ConceptId): number {
-  return ancestors(registry, id).length;
+export function depth(index: ConceptIndex, id: ConceptId): number {
+  return ancestors(index, id).length;
 }
 
 export type ResolveOutcome =
@@ -107,10 +89,10 @@ export type ResolveOutcome =
 
 export interface ResolveOptions {
   /**
-   * Parent proposed by the caller. Must already exist in the registry:
-   * a concept and its parent are never created in the same operation.
+   * Broader concept proposed by the caller, resolved like any term. It must
+   * already exist: a concept and its parent are never created together
    */
-  parentHint?: ConceptId;
+  parentTerm?: string;
   now: Date;
 }
 
@@ -151,24 +133,12 @@ export function resolveConcept(
     return { status: "ambiguous", candidates: [] };
   }
 
-  const live = registry.concepts.filter((c) => c.mergedInto === null);
-
-  const exact = live.find((c) => c.id === key || c.aliases.includes(key));
-  if (exact) {
+  const exact = exactMatch(registry, key);
+  if (exact !== undefined) {
     return { status: "matched", concept: exact, registry };
   }
 
-  const scored = live
-    .map((c) => ({
-      concept: c,
-      score: Math.max(
-        similarity(key, c.id),
-        ...c.aliases.map((alias) => similarity(key, alias)),
-        similarity(key, normalizeTerm(c.canonicalName)),
-      ),
-    }))
-    .sort((x, y) => y.score - x.score);
-
+  const scored = rank(registry, key);
   const best = scored[0];
 
   if (best && best.score >= MATCH_THRESHOLD) {
@@ -194,6 +164,46 @@ export function resolveConcept(
   return createConcept(registry, key, term, options);
 }
 
+/** Matches an existing concept without creating one or learning an alias */
+export function findConcept(
+  registry: ConceptRegistry,
+  term: string,
+): Concept | undefined {
+  const key = normalizeTerm(term);
+  if (key.length === 0) return undefined;
+  const exact = exactMatch(registry, key);
+  if (exact !== undefined) return exact;
+  const best = rank(registry, key)[0];
+  return best !== undefined && best.score >= MATCH_THRESHOLD
+    ? best.concept
+    : undefined;
+}
+
+function exactMatch(
+  registry: ConceptRegistry,
+  key: string,
+): Concept | undefined {
+  return registry.concepts.find(
+    (concept) => concept.id === key || concept.aliases.includes(key),
+  );
+}
+
+function rank(
+  registry: ConceptRegistry,
+  key: string,
+): Array<{ concept: Concept; score: number }> {
+  return registry.concepts
+    .map((concept) => ({
+      concept,
+      score: Math.max(
+        similarity(key, concept.id),
+        ...concept.aliases.map((alias) => similarity(key, alias)),
+        similarity(key, normalizeTerm(concept.canonicalName)),
+      ),
+    }))
+    .sort((x, y) => y.score - x.score);
+}
+
 function createConcept(
   registry: ConceptRegistry,
   id: string,
@@ -204,10 +214,9 @@ function createConcept(
     id: id as ConceptId,
     canonicalName: originalTerm.trim(),
     aliases: [],
-    parentId: resolveParent(registry, options.parentHint),
+    parentId: resolveParent(registry, options.parentTerm),
     source: "proposed",
     createdAt: options.now.toISOString(),
-    mergedInto: null,
   };
 
   return {
@@ -228,14 +237,14 @@ function createConcept(
  */
 function resolveParent(
   registry: ConceptRegistry,
-  hint: ConceptId | undefined,
+  parentTerm: string | undefined,
 ): ConceptId | null {
-  if (hint === undefined) return null;
+  if (parentTerm === undefined) return null;
 
-  const parent = canonical(registry, hint);
-  if (parent === null) return null;
+  const parent = findConcept(registry, parentTerm);
+  if (parent === undefined) return null;
 
-  if (depth(registry, parent.id) >= MAX_CONCEPT_DEPTH - 1) {
+  if (depth(indexConcepts(registry), parent.id) >= MAX_CONCEPT_DEPTH - 1) {
     return parent.parentId;
   }
   return parent.id;

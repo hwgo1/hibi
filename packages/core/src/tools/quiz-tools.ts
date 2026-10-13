@@ -1,106 +1,34 @@
 import { z } from "zod";
 
 import type { ConceptId } from "../concepts";
-import { resolveConcept, validateConceptTerm } from "../concept-resolver";
 import { disputeWeight, scoreResponse } from "../quiz/scoring";
 import {
   OPEN_QUIZ_SCHEMA_VERSION,
-  QUIZ_MAX_OPTIONS,
-  QUIZ_MIN_OPTIONS,
   QuizQuestionSchema,
-  QuizResponseSchema,
   type QuizQuestion,
 } from "../schemas/quiz";
+import { ConceptTermArg, ParentTermArg, resolveTerm } from "./concept-term";
 import type { ToolContext } from "./context";
-import type { Tool } from "./registry";
+import { defineTool, type Tool } from "./registry";
 
 const MAX_QUESTIONS = 5;
 
-const AskQuizArgs = z.object({
-  conceptTerm: z.string().min(1),
-  parentTerm: z.string().min(1).optional(),
-  questions: z
-    .array(QuizQuestionSchema.omit({ conceptId: true, id: true }))
-    .min(1)
-    .max(MAX_QUESTIONS),
-});
-
 /** Opens a quiz on a concept */
-export const askQuiz: Tool<ToolContext> = {
-  definition: {
-    name: "ask_quiz",
-    description:
-      "Ask multiple-choice questions to check conceptual understanding, which running code does not measure. Wrong options must be plausible and each must state the misconception it represents.",
-    parameters: {
-      type: "object",
-      properties: {
-        conceptTerm: {
-          type: "string",
-          description: "The topic in English, at most four words.",
-        },
-        parentTerm: {
-          type: "string",
-          description: "A broader existing concept.",
-        },
-        questions: {
-          type: "array",
-          maxItems: MAX_QUESTIONS,
-          items: {
-            type: "object",
-            properties: {
-              prompt: {
-                type: "string",
-                description: "The question, in the user's language.",
-              },
-              options: {
-                type: "array",
-                minItems: QUIZ_MIN_OPTIONS,
-                maxItems: QUIZ_MAX_OPTIONS,
-                items: {
-                  type: "object",
-                  properties: {
-                    id: { type: "string", description: "Short slug: a, b, c." },
-                    text: { type: "string" },
-                    misconception: {
-                      type: "string",
-                      description:
-                        "For wrong options only: the specific mistaken belief that leads here.",
-                    },
-                  },
-                  required: ["id", "text"],
-                },
-              },
-              correctOptionId: { type: "string" },
-              explanation: {
-                type: "string",
-                description:
-                  "Why the correct answer is correct, shown after answering.",
-              },
-            },
-            required: ["prompt", "options", "correctOptionId", "explanation"],
-          },
-        },
-      },
-      required: ["conceptTerm", "parentTerm", "questions"],
-    },
-  },
+export const askQuiz: Tool<ToolContext> = defineTool({
+  name: "ask_quiz",
+  description:
+    "Ask multiple-choice questions to check conceptual understanding, which running code does not measure. Wrong options must be plausible and each must state the misconception it represents.",
+  args: z.object({
+    conceptTerm: ConceptTermArg,
+    parentTerm: ParentTermArg,
+    questions: z
+      .array(QuizQuestionSchema.omit({ conceptId: true, id: true }))
+      .min(1)
+      .max(MAX_QUESTIONS)
+      .describe("One to five questions on this concept, asked in order."),
+  }),
 
-  async execute(rawArgs, context) {
-    const args = AskQuizArgs.parse(rawArgs);
-
-    const problem = validateConceptTerm(args.conceptTerm);
-    if (problem !== null)
-      return { content: `Not a concept: ${problem}`, isError: true };
-
-    const outcome = resolveConcept(context.registry, args.conceptTerm, {
-      parentHint: args.parentTerm as ConceptId | undefined,
-      now: context.clock.now(),
-    });
-    if (outcome.status === "ambiguous") {
-      return { content: "Ambiguous concept. Ask the user which one." };
-    }
-    context.registry = outcome.registry;
-
+  async execute(args, context: ToolContext) {
     const invalid = args.questions.find(
       (question) =>
         !question.options.some(
@@ -114,10 +42,14 @@ export const askQuiz: Tool<ToolContext> = {
       };
     }
 
+    const resolved = resolveTerm(context, args.conceptTerm, args.parentTerm);
+    if (!resolved.ok) return resolved.outcome;
+    const concept = resolved.concept;
+
     const questions: QuizQuestion[] = args.questions.map((question, index) => ({
       ...question,
       id: `q${index + 1}`,
-      conceptId: outcome.concept.id,
+      conceptId: concept.id,
     }));
 
     context.session.openQuiz = {
@@ -126,46 +58,35 @@ export const askQuiz: Tool<ToolContext> = {
       cursor: 0,
       askedAt: context.clock.now().toISOString(),
       disputeWeight:
-        context.session.dispute?.conceptId === outcome.concept.id
+        context.session.dispute?.conceptId === concept.id
           ? context.session.dispute.weight
           : undefined,
     };
 
     return { content: renderQuestion(questions[0]!, 1, questions.length) };
   },
-};
-
-const AnswerArgs = z.object({
-  optionId: z.string().min(1).optional(),
-  response: QuizResponseSchema.optional(),
 });
 
 /** Records an answer to the open question and advances the quiz */
-export const answerQuiz: Tool<ToolContext> = {
-  definition: {
-    name: "answer_quiz",
-    description:
-      "Record the user's answer to the open quiz question. Pass optionId for a choice, or response 'unknown' when they say they do not know.",
-    parameters: {
-      type: "object",
-      properties: {
-        optionId: {
-          type: "string",
-          description: "The option the user picked.",
-        },
-        response: {
-          type: "string",
-          enum: ["unknown"],
-          description:
-            "Use when the user says they do not know rather than guessing.",
-        },
-      },
-      required: [],
-    },
-  },
+export const answerQuiz: Tool<ToolContext> = defineTool({
+  name: "answer_quiz",
+  description:
+    "Record the user's answer to the open quiz question. Pass optionId for a choice, or response 'unknown' when they say they do not know.",
+  args: z.object({
+    optionId: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("The option the user picked."),
+    response: z
+      .enum(["unknown"])
+      .optional()
+      .describe(
+        "Use when the user says they do not know rather than guessing.",
+      ),
+  }),
 
-  async execute(rawArgs, context) {
-    const args = AnswerArgs.parse(rawArgs);
+  async execute(args, context: ToolContext) {
     const quiz = context.session.openQuiz;
 
     if (quiz === null) {
@@ -212,46 +133,20 @@ export const answerQuiz: Tool<ToolContext> = {
       content: `${verdict(response, question)}\n\n${renderQuestion(next, quiz.cursor + 1, quiz.questions.length)}`,
     };
   },
-};
-
-const DisputeArgs = z.object({
-  conceptTerm: z.string().min(1),
 });
 
 /** Opens a challenge to a mastery estimate */
-export const disputeMastery: Tool<ToolContext> = {
-  definition: {
-    name: "dispute_mastery",
-    description:
-      "Use when the user says a mastery estimate is wrong. Opens a challenge; follow it with ask_quiz or propose_exercise on that concept so the result can settle it.",
-    parameters: {
-      type: "object",
-      properties: {
-        conceptTerm: {
-          type: "string",
-          description: "The concept being disputed, in English.",
-        },
-      },
-      required: ["conceptTerm"],
-    },
-  },
+export const disputeMastery: Tool<ToolContext> = defineTool({
+  name: "dispute_mastery",
+  description:
+    "Use when the user says a mastery estimate is wrong. Opens a challenge; follow it with ask_quiz or propose_exercise on that concept so the result can settle it.",
+  args: z.object({ conceptTerm: ConceptTermArg }),
 
-  async execute(rawArgs, context) {
-    const args = DisputeArgs.parse(rawArgs);
+  async execute(args, context: ToolContext) {
+    const resolved = resolveTerm(context, args.conceptTerm);
+    if (!resolved.ok) return resolved.outcome;
 
-    const problem = validateConceptTerm(args.conceptTerm);
-    if (problem !== null)
-      return { content: `Not a concept: ${problem}`, isError: true };
-
-    const outcome = resolveConcept(context.registry, args.conceptTerm, {
-      now: context.clock.now(),
-    });
-    if (outcome.status === "ambiguous") {
-      return { content: "Ambiguous concept. Ask the user which one." };
-    }
-    context.registry = outcome.registry;
-
-    const conceptId = outcome.concept.id;
+    const conceptId = resolved.concept.id;
     const prior = await priorDisputes(context, conceptId);
 
     context.session.dispute = {
@@ -269,14 +164,14 @@ export const disputeMastery: Tool<ToolContext> = {
 
     return {
       content:
-        `Dispute opened on ${outcome.concept.canonicalName}. ` +
+        `Dispute opened on ${resolved.concept.canonicalName}. ` +
         `The estimate stays as it is until something is demonstrated: ask a quiz or set an exercise on this concept. ` +
         (repeat
           ? `This concept has been disputed before, so the result counts for less.`
           : ``),
     };
   },
-};
+});
 
 function renderQuestion(
   question: QuizQuestion,

@@ -1,5 +1,5 @@
 import type { ConceptId, ConceptRegistry } from "../concepts";
-import { ancestors, canonical } from "../concept-resolver";
+import { ancestors, indexConcepts } from "../concept-resolver";
 import type { EvidenceEvent } from "../schemas/evidence";
 import { evidenceWeight } from "../schemas/evidence";
 import type { MasteryEntry } from "../schemas/learner";
@@ -10,6 +10,11 @@ import { creditMultiplier } from "./hint-ladder";
 const ROLLUP_DECAY = 0.4;
 
 const CONFIDENCE_SATURATION = 8;
+
+/** Evidence loses half its weight every this many days */
+const HALF_LIFE_DAYS = 60;
+
+const MS_PER_DAY = 86_400_000;
 
 interface Accumulator {
   weightedScore: number;
@@ -24,7 +29,8 @@ interface Accumulator {
  * rather than migrating it.
  *
  * Each event credits its own concept at full weight and every ancestor at a decaying weight, so
- * narrow topics accumulate signal at a level broad enough to be meaningful
+ * narrow topics accumulate signal at a level broad enough to be meaningful. Older evidence weighs
+ * less: recent work sets the level, and confidence fades on concepts left untouched
  */
 export function computeMastery(
   registry: ConceptRegistry,
@@ -32,6 +38,7 @@ export function computeMastery(
   now: Date,
 ): MasteryEntry[] {
   const totals = new Map<string, Accumulator>();
+  const index = indexConcepts(registry);
 
   const credit = (
     conceptId: ConceptId,
@@ -56,22 +63,23 @@ export function computeMastery(
   };
 
   for (const event of events) {
-    const weight = evidenceWeight(event);
+    const weight = evidenceWeight(event) * recency(event.at, now);
     if (weight === 0) continue;
 
     const score = scoreOf(event);
     if (score === null) continue;
 
-    const target = canonical(registry, event.conceptId);
-    if (target === null) continue;
+    if (!index.has(event.conceptId)) continue;
+    credit(event.conceptId, score, weight, event.at, true);
 
-    credit(target.id, score, weight, event.at, true);
-
-    for (const [index, ancestor] of ancestors(registry, target.id).entries()) {
+    for (const [distance, ancestor] of ancestors(
+      index,
+      event.conceptId,
+    ).entries()) {
       credit(
         ancestor.id,
         score,
-        weight * ROLLUP_DECAY ** (index + 1),
+        weight * ROLLUP_DECAY ** (distance + 1),
         event.at,
         false,
       );
@@ -96,6 +104,25 @@ export function computeMastery(
   }
 
   return entries;
+}
+
+/** Concepts explained or demonstrated to the learner, whether or not anything was scored */
+export function seenConcepts(events: EvidenceEvent[]): ConceptId[] {
+  const seen = new Set<ConceptId>();
+  for (const event of events) {
+    if (
+      event.kind === "concept_explained" ||
+      event.kind === "code_demonstrated"
+    ) {
+      seen.add(event.conceptId);
+    }
+  }
+  return [...seen];
+}
+
+function recency(at: string, now: Date): number {
+  const ageDays = Math.max(0, now.getTime() - Date.parse(at)) / MS_PER_DAY;
+  return 0.5 ** (ageDays / HALF_LIFE_DAYS);
 }
 
 /**

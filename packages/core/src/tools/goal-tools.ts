@@ -1,16 +1,10 @@
 import { z } from "zod";
 
-import { resolveConcept, validateConceptTerm } from "../concept-resolver";
 import { deriveNextSteps } from "../goal/next-steps";
 import { GOAL_SCHEMA_VERSION, GoalKindSchema } from "../schemas/goal";
+import { ConceptTermArg, resolveTerm } from "./concept-term";
 import type { ToolContext } from "./context";
-import type { Tool } from "./registry";
-
-const SetGoalArgs = z.object({
-  kind: GoalKindSchema,
-  statement: z.string().min(1),
-  language: z.string().min(1).optional(),
-});
+import { defineTool, type Tool } from "./registry";
 
 /**
  * Records what the learner is working toward.
@@ -19,35 +13,26 @@ const SetGoalArgs = z.object({
  * so the objective never has to be revised as evidence accumulates — it just
  * points somewhere, and the route is recalculated each time.
  */
-export const setGoal: Tool<ToolContext> = {
-  definition: {
-    name: "set_goal",
-    description:
-      "Record what the learner wants to work toward, such as learning a language, preparing for interviews or building something. Call it as soon as they say what they are after.",
-    parameters: {
-      type: "object",
-      properties: {
-        kind: {
-          type: "string",
-          enum: ["language", "domain", "interview", "project"],
-          description: "What shape the objective has.",
-        },
-        statement: {
-          type: "string",
-          description: "The objective in the learner's own words.",
-        },
-        language: {
-          type: "string",
-          description:
-            "Programming language, when one is involved. English name, like Go.",
-        },
-      },
-      required: ["kind", "statement"],
-    },
-  },
+export const setGoal: Tool<ToolContext> = defineTool({
+  name: "set_goal",
+  description:
+    "Record what the learner wants to work toward, such as learning a language, preparing for interviews or building something. Call it as soon as they say what they are after.",
+  args: z.object({
+    kind: GoalKindSchema.describe("What shape the objective has."),
+    statement: z
+      .string()
+      .min(1)
+      .describe("The objective in the learner's own words."),
+    language: z
+      .string()
+      .min(1)
+      .optional()
+      .describe(
+        "Programming language, when one is involved. English name, like Go.",
+      ),
+  }),
 
-  async execute(rawArgs, context) {
-    const args = SetGoalArgs.parse(rawArgs);
+  async execute(args, context: ToolContext) {
     const at = context.clock.now().toISOString();
     const previous = context.learner.goal;
 
@@ -86,7 +71,7 @@ export const setGoal: Tool<ToolContext> = {
       content: `${replaced}Goal recorded.\n\n${renderSteps(steps, context)}`,
     };
   },
-};
+});
 
 /**
  * Returns the current objective and what to work on next.
@@ -94,15 +79,13 @@ export const setGoal: Tool<ToolContext> = {
  * Steps are recomputed on every call rather than stored, so resuming after a
  * week reflects everything that happened since.
  */
-export const nextSteps: Tool<ToolContext> = {
-  definition: {
-    name: "next_steps",
-    description:
-      "Get the learner's objective and what is worth working on next. Use it when they ask what to do, say to continue, or come back after a break.",
-    parameters: { type: "object", properties: {}, required: [] },
-  },
+export const nextSteps: Tool<ToolContext> = defineTool({
+  name: "next_steps",
+  description:
+    "Get the learner's objective and what is worth working on next. Use it when they ask what to do, say to continue, or come back after a break.",
+  args: z.object({}),
 
-  async execute(_rawArgs, context) {
+  async execute(_args, context: ToolContext) {
     const goal = context.learner.goal;
 
     if (goal === null || goal.status !== "active") {
@@ -133,10 +116,6 @@ export const nextSteps: Tool<ToolContext> = {
       content: `Working toward: ${goal.statement}.\n\n${renderSteps(steps, context)}`,
     };
   },
-};
-
-const SkipArgs = z.object({
-  conceptTerm: z.string().min(1),
 });
 
 /**
@@ -147,44 +126,21 @@ const SkipArgs = z.object({
  * evidence is recorded as self-declared, which carries little weight and will
  * be corrected by anything they later do.
  */
-export const skipConcept: Tool<ToolContext> = {
-  definition: {
-    name: "skip_concept",
-    description:
-      "Mark a concept as one the learner says they already know, so it stops being proposed. Accept it without testing them.",
-    parameters: {
-      type: "object",
-      properties: {
-        conceptTerm: {
-          type: "string",
-          description: "The concept in English, at most four words.",
-        },
-      },
-      required: ["conceptTerm"],
-    },
-  },
+export const skipConcept: Tool<ToolContext> = defineTool({
+  name: "skip_concept",
+  description:
+    "Mark a concept as one the learner says they already know, so it stops being proposed. Accept it without testing them.",
+  args: z.object({ conceptTerm: ConceptTermArg }),
 
-  async execute(rawArgs, context) {
-    const args = SkipArgs.parse(rawArgs);
-
+  async execute(args, context: ToolContext) {
     if (context.learner.goal === null) {
       return { content: "no objective is set", isError: true };
     }
 
-    const problem = validateConceptTerm(args.conceptTerm);
-    if (problem !== null)
-      return { content: `Not a concept: ${problem}`, isError: true };
+    const resolved = resolveTerm(context, args.conceptTerm);
+    if (!resolved.ok) return resolved.outcome;
 
-    const outcome = resolveConcept(context.registry, args.conceptTerm, {
-      now: context.clock.now(),
-    });
-
-    if (outcome.status === "ambiguous") {
-      return { content: "Ambiguous concept. Ask the user which one." };
-    }
-    context.registry = outcome.registry;
-
-    const conceptId = outcome.concept.id;
+    const conceptId = resolved.concept.id;
 
     if (!context.learner.goal.skipped.includes(conceptId)) {
       context.learner.goal.skipped.push(conceptId);
@@ -200,10 +156,10 @@ export const skipConcept: Tool<ToolContext> = {
     });
 
     return {
-      content: `Noted — ${outcome.concept.canonicalName} will not come up again unless something suggests otherwise. Move on to the next step.`,
+      content: `Noted — ${resolved.concept.canonicalName} will not come up again unless something suggests otherwise. Move on to the next step.`,
     };
   },
-};
+});
 
 function renderSteps(
   steps: ReturnType<typeof deriveNextSteps>,
@@ -234,6 +190,8 @@ function describe(
   switch (reason) {
     case "untouched":
       return "never covered";
+    case "seen":
+      return "explained, never practiced";
     case "weak":
       return "attempted, not solid yet";
     case "unverified":

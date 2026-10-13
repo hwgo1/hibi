@@ -68,36 +68,6 @@ export function deriveSignals(
     }
   }
 
-  const explained = events.filter(
-    (event) => event.kind === "concept_explained",
-  ).length;
-  const exercised = events.filter(
-    (event) => event.kind === "exercise_proposed",
-  ).length;
-  const total = explained + exercised;
-
-  if (total >= MIN_SAMPLE) {
-    const theoryShare = explained / total;
-
-    if (theoryShare >= 0.7) {
-      signals.push({
-        key: "entry-point",
-        value: "asks for the concept before the exercise",
-        confidence: confidenceFor(total),
-        evidenceCount: total,
-        updatedAt: at,
-      });
-    } else if (theoryShare <= 0.3) {
-      signals.push({
-        key: "entry-point",
-        value: "starts from code rather than explanation",
-        confidence: confidenceFor(total),
-        evidenceCount: total,
-        updatedAt: at,
-      });
-    }
-  }
-
   return signals;
 }
 

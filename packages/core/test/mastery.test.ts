@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import type { ConceptId, ConceptRegistry } from "../src/concepts";
 import { seedRegistry } from "../src/concepts";
 import type { SessionId, UserId } from "../src/ids";
-import { computeMastery } from "../src/policy/mastery";
+import { computeMastery, seenConcepts } from "../src/policy/mastery";
 import type { EvidenceEvent } from "../src/schemas/evidence";
 
 const NOW = new Date("2026-01-01T00:00:00.000Z");
@@ -22,7 +22,6 @@ function registryWithGoroutines(): ConceptRegistry {
         parentId: "concurrency" as ConceptId,
         source: "proposed",
         createdAt: NOW.toISOString(),
-        mergedInto: null,
       },
     ],
   };
@@ -193,5 +192,83 @@ describe("computeMastery", () => {
       NOW,
     );
     expect(entryFor(entries, GOROUTINES)).toBeUndefined();
+  });
+});
+
+describe("recency", () => {
+  const daysAgo = (days: number) =>
+    new Date(NOW.getTime() - days * 86_400_000).toISOString();
+
+  test("recent passes outweigh an old failure", () => {
+    const entry = entryFor(
+      computeMastery(
+        registryWithGoroutines(),
+        [
+          event({ outcome: "fail", at: daysAgo(240) }),
+          event({ at: daysAgo(2) }),
+          event({ at: daysAgo(1) }),
+        ],
+        NOW,
+      ),
+      GOROUTINES,
+    )!;
+
+    expect(entry.level).toBeGreaterThan(0.9);
+  });
+
+  test("a recent failure pulls down old passes", () => {
+    const entry = entryFor(
+      computeMastery(
+        registryWithGoroutines(),
+        [
+          event({ at: daysAgo(240) }),
+          event({ at: daysAgo(200) }),
+          event({ outcome: "fail", at: daysAgo(1) }),
+        ],
+        NOW,
+      ),
+      GOROUTINES,
+    )!;
+
+    expect(entry.level).toBeLessThan(0.3);
+  });
+
+  test("confidence fades on a concept left untouched", () => {
+    const recent = entryFor(
+      computeMastery(
+        registryWithGoroutines(),
+        [event({ at: daysAgo(1) })],
+        NOW,
+      ),
+      GOROUTINES,
+    )!;
+    const old = entryFor(
+      computeMastery(
+        registryWithGoroutines(),
+        [event({ at: daysAgo(120) })],
+        NOW,
+      ),
+      GOROUTINES,
+    )!;
+
+    expect(old.confidence).toBeLessThan(recent.confidence / 2);
+    expect(old.formulaVersion).toBe(3);
+  });
+});
+
+describe("seenConcepts", () => {
+  test("lists what was explained or demonstrated, once each", () => {
+    const seen = seenConcepts([
+      event({ kind: "concept_explained", provenance: "system" }),
+      event({ kind: "concept_explained", provenance: "system" }),
+      event({
+        kind: "code_demonstrated",
+        provenance: "system",
+        conceptId: "concurrency" as ConceptId,
+      }),
+      event({ kind: "test_run", conceptId: "testing" as ConceptId }),
+    ]);
+
+    expect(seen).toEqual([GOROUTINES, "concurrency" as ConceptId]);
   });
 });

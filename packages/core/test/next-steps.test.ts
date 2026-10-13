@@ -20,7 +20,6 @@ function registryWith(ids: string[]): ConceptRegistry {
         parentId: "concurrency" as ConceptId,
         source: "proposed" as const,
         createdAt: TEST_NOW.toISOString(),
-        mergedInto: null,
       })),
     ],
   };
@@ -147,5 +146,19 @@ describe("deriveNextSteps", () => {
     );
 
     expect(steps[0]?.conceptId).toBe("goroutines" as ConceptId);
+  });
+
+  test("a concept explained but never practiced is not reported as never covered", () => {
+    const learner = testLearner();
+    learner.seen = ["goroutines" as ConceptId];
+
+    const steps = deriveNextSteps(
+      goal(),
+      learner,
+      registryWith(["goroutines"]),
+      TEST_NOW,
+    );
+
+    expect(steps[0]?.reason).toBe("seen");
   });
 });

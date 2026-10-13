@@ -30,7 +30,7 @@ export const DEFAULT_TEACHING_PREFERENCES: TeachingPreferences = Object.freeze(
   TeachingPreferencesSchema.parse({}),
 );
 
-export const MASTERY_FORMULA_VERSION = 2;
+export const MASTERY_FORMULA_VERSION = 3;
 
 export const MasteryEntrySchema = z.object({
   conceptId: ConceptIdSchema,
@@ -83,6 +83,8 @@ export const LearnerModelSchema = z.object({
   preferences: TeachingPreferencesSchema,
   goal: GoalSchema.nullable().default(null),
   mastery: z.array(MasteryEntrySchema).default([]),
+  /** Concepts explained or demonstrated, so a concept taught but never practiced is not "never covered" */
+  seen: z.array(ConceptIdSchema).default([]),
   recurringErrors: z.array(RecurringErrorSchema).default([]),
   inferredSignals: z.array(InferredSignalSchema).default([]),
 });

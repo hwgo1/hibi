@@ -7,31 +7,21 @@ import { runCommand, truncateOutput } from "../verify/runner";
 import { TEST_RUNNER_SPECS } from "../verify/test-runners";
 import type { ToolContext } from "./context";
 import { completeItem, findOpenItem } from "./items";
-import type { Tool } from "./registry";
+import { defineTool, type Tool } from "./registry";
 
-const VerifyArgs = z.object({
-  itemId: z.string().min(1).optional(),
-});
+export const verify: Tool<ToolContext> = defineTool({
+  name: "verify",
+  description:
+    "Run the exercise's check, its own tests and nothing else, and report the result. Use it when the user says an attempt is done, instead of judging their code by reading it.",
+  args: z.object({
+    itemId: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("The exercise. Defaults to the active one."),
+  }),
 
-export const verify: Tool<ToolContext> = {
-  definition: {
-    name: "verify",
-    description:
-      "Run the exercise's check, its own tests and nothing else, and report the result. Use it when the user says an attempt is done, instead of judging their code by reading it.",
-    parameters: {
-      type: "object",
-      properties: {
-        itemId: {
-          type: "string",
-          description: "The exercise. Defaults to the active one.",
-        },
-      },
-      required: [],
-    },
-  },
-
-  async execute(rawArgs, context) {
-    const args = VerifyArgs.parse(rawArgs);
+  async execute(args, context: ToolContext) {
     const lookup = findOpenItem(context.session, args.itemId);
     if (!lookup.found) return { content: lookup.reason, isError: true };
 
@@ -99,7 +89,7 @@ export const verify: Tool<ToolContext> = {
 
     return { content: paragraphs(report.summary, output, surprise) };
   },
-};
+});
 
 async function exists(context: ToolContext, path: string): Promise<boolean> {
   try {

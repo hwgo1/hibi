@@ -11,7 +11,7 @@ import type {
 } from "../ports/llm";
 import type { Clock, Storage } from "../ports/storage";
 import type { Workspace } from "../ports/workspace";
-import { computeMastery } from "../policy/mastery";
+import { computeMastery, seenConcepts } from "../policy/mastery";
 import type { EvidenceEvent } from "../schemas/evidence";
 import { EVIDENCE_EVENT_SCHEMA_VERSION } from "../schemas/evidence";
 import type { LearnerModel } from "../schemas/learner";
@@ -211,6 +211,7 @@ export class TutorSession {
       preferences: { ...DEFAULT_TEACHING_PREFERENCES },
       goal: null,
       mastery: [],
+      seen: [],
       recurringErrors: [],
       inferredSignals: [],
     };
@@ -257,15 +258,17 @@ export class TutorSession {
     await storage.saveSession(context.session);
     await storage.saveConceptRegistry(context.session.userId, context.registry);
 
-    const changesMastery = context.pendingEvidence.some(
+    const changesModel = context.pendingEvidence.some(
       (event) =>
         event.kind === "attempt_submitted" ||
         event.kind === "test_run" ||
         event.kind === "quiz_answered" ||
-        event.kind === "self_assessment",
+        event.kind === "self_assessment" ||
+        event.kind === "concept_explained" ||
+        event.kind === "code_demonstrated",
     );
 
-    if (!changesMastery) {
+    if (!changesModel) {
       await storage.saveLearnerModel(context.learner);
       return;
     }
@@ -274,6 +277,7 @@ export class TutorSession {
       userId: context.session.userId,
     });
     context.learner.mastery = computeMastery(context.registry, events, now);
+    context.learner.seen = seenConcepts(events);
     context.learner.inferredSignals = deriveSignals(events, now);
     context.learner.updatedAt = at;
     await storage.saveLearnerModel(context.learner);

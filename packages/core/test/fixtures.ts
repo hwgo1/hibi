@@ -44,6 +44,7 @@ export function testLearner(now: Date = TEST_NOW): LearnerModel {
     preferences: { ...DEFAULT_TEACHING_PREFERENCES },
     goal: null,
     mastery: [],
+    seen: [],
     recurringErrors: [],
     inferredSignals: [],
   };

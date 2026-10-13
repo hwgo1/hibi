@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import {
   computeMastery,
+  seenConcepts,
   EVIDENCE_EVENT_SCHEMA_VERSION,
   indexRepo,
   newSessionState,
@@ -363,6 +364,7 @@ export class Daemon {
     const now = this.clock.now();
 
     learner.mastery = computeMastery(registry, events, now);
+    learner.seen = seenConcepts(events);
     learner.updatedAt = now.toISOString();
     await this.storage.saveLearnerModel(learner);
   }

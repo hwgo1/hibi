@@ -192,6 +192,7 @@ function newLearner(language: string, name: string): LearnerModel {
     preferences: { ...DEFAULT_TEACHING_PREFERENCES, language, name },
     goal: null,
     mastery: [],
+    seen: [],
     recurringErrors: [],
     inferredSignals: [],
   };

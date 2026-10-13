@@ -75,7 +75,7 @@ describe("deriveSignals", () => {
     ).toContain("over");
   });
 
-  test("notices a learner who starts from code", () => {
+  test("what the tutor chose to do says nothing about the learner", () => {
     const signals = deriveSignals(
       [
         ...repeat(9, { kind: "exercise_proposed" }),
@@ -84,9 +84,7 @@ describe("deriveSignals", () => {
       NOW,
     );
 
-    expect(
-      signals.find((signal) => signal.key === "entry-point")?.value,
-    ).toContain("code");
+    expect(signals).toEqual([]);
   });
 
   test("confidence never reaches certainty", () => {

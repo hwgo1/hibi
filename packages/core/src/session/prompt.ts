@@ -137,9 +137,7 @@ function renderConcepts(
   learner: LearnerModel,
 ): string {
   const known = new Set(learner.mastery.map((m) => m.conceptId));
-  const live = registry.concepts.filter((c) => c.mergedInto === null);
-
-  const ranked = live
+  const ranked = registry.concepts
     .slice()
     .sort((a, b) => rank(b, known) - rank(a, known))
     .slice(0, LIMITS.concepts);

@@ -4,9 +4,15 @@ import { ConceptIdSchema } from "../concepts";
 import { IsoDateTimeSchema, SlugSchema, UnitIntervalSchema } from "../ids";
 
 export const QuizOptionSchema = z.object({
-  id: SlugSchema,
+  id: SlugSchema.describe("Short slug: a, b, c."),
   text: z.string().min(1),
-  misconception: z.string().min(1).optional(),
+  misconception: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "For wrong options only: the specific mistaken belief that leads here.",
+    ),
 });
 
 export type QuizOption = z.infer<typeof QuizOptionSchema>;
@@ -17,13 +23,16 @@ export const QUIZ_MAX_OPTIONS = 5;
 export const QuizQuestionSchema = z.object({
   id: SlugSchema,
   conceptId: ConceptIdSchema,
-  prompt: z.string().min(1),
+  prompt: z.string().min(1).describe("The question, in the user's language."),
   options: z
     .array(QuizOptionSchema)
     .min(QUIZ_MIN_OPTIONS)
     .max(QUIZ_MAX_OPTIONS),
   correctOptionId: SlugSchema,
-  explanation: z.string().min(1),
+  explanation: z
+    .string()
+    .min(1)
+    .describe("Why the correct answer is correct, shown after answering."),
 });
 
 export type QuizQuestion = z.infer<typeof QuizQuestionSchema>;

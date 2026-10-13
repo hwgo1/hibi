@@ -2,27 +2,20 @@ import { z } from "zod";
 
 import type { ToolContext } from "./context";
 import { completeItem, findOpenItem } from "./items";
-import type { Tool } from "./registry";
+import { defineTool, type Tool } from "./registry";
 
 const LIST_LIMIT = 80;
 const MAX_CONTEXT_FILES = 3;
 
-const ListArgs = z.object({ subpath: z.string().optional() });
+export const listFiles: Tool<ToolContext> = defineTool({
+  name: "list_files",
+  description:
+    "List files in the repository. Dependency and build directories are excluded.",
+  args: z.object({
+    subpath: z.string().optional().describe("Repo-relative directory to list."),
+  }),
 
-export const listFiles: Tool<ToolContext> = {
-  definition: {
-    name: "list_files",
-    description:
-      "List files in the repository. Dependency and build directories are excluded.",
-    parameters: {
-      type: "object",
-      properties: { subpath: { type: "string" } },
-      required: [],
-    },
-  },
-
-  async execute(rawArgs, context) {
-    const args = ListArgs.parse(rawArgs);
+  async execute(args, context: ToolContext) {
     const result = await context.workspace.listFiles({
       subpath: args.subpath,
       limit: LIST_LIMIT,
@@ -36,23 +29,16 @@ export const listFiles: Tool<ToolContext> = {
         : lines,
     };
   },
-};
+});
 
-const ReadArgs = z.object({ path: z.string().min(1) });
+export const readFile: Tool<ToolContext> = defineTool({
+  name: "read_file",
+  description: "Read a file from the repository.",
+  args: z.object({
+    path: z.string().min(1).describe("Repo-relative path."),
+  }),
 
-export const readFile: Tool<ToolContext> = {
-  definition: {
-    name: "read_file",
-    description: "Read a file from the repository.",
-    parameters: {
-      type: "object",
-      properties: { path: { type: "string" } },
-      required: ["path"],
-    },
-  },
-
-  async execute(rawArgs, context) {
-    const args = ReadArgs.parse(rawArgs);
+  async execute(args, context: ToolContext) {
     const file = await context.workspace.readFile(args.path);
 
     const pinned = context.session.contextFiles.filter(
@@ -65,38 +51,30 @@ export const readFile: Tool<ToolContext> = {
       content: `${file.path}${file.dirty ? " (unsaved)" : ""}\n\n${file.text}`,
     };
   },
-};
-
-const RecordArgs = z.object({
-  itemId: z.string().min(1),
-  outcome: z.enum(["pass", "fail", "partial"]),
-  filePath: z.string().min(1).optional(),
-  note: z.string().optional(),
 });
 
 /** The model's verdict on an attempt. Exercises with a check are decided only by verify */
-export const recordAttempt: Tool<ToolContext> = {
-  definition: {
-    name: "record_attempt",
-    description:
-      "Record how the user's own attempt at an exercise without a check turned out. Never use it for environment or setup problems such as a missing compiler, an installation error or a wrong PATH.",
-    parameters: {
-      type: "object",
-      properties: {
-        itemId: { type: "string", description: "The exercise." },
-        outcome: { type: "string", enum: ["pass", "fail", "partial"] },
-        filePath: {
-          type: "string",
-          description: "Repo-relative file containing the attempt.",
-        },
-        note: { type: "string" },
-      },
-      required: ["itemId", "outcome"],
-    },
-  },
+export const recordAttempt: Tool<ToolContext> = defineTool({
+  name: "record_attempt",
+  description:
+    "Record how the user's own attempt at an exercise without a check turned out. Never use it for environment or setup problems such as a missing compiler, an installation error or a wrong PATH.",
+  args: z.object({
+    itemId: z.string().min(1).describe("The exercise."),
+    outcome: z
+      .enum(["pass", "fail", "partial"])
+      .describe("How the attempt turned out."),
+    filePath: z
+      .string()
+      .min(1)
+      .optional()
+      .describe("Repo-relative file containing the attempt."),
+    note: z
+      .string()
+      .optional()
+      .describe("What decided the outcome, in one line."),
+  }),
 
-  async execute(rawArgs, context) {
-    const args = RecordArgs.parse(rawArgs);
+  async execute(args, context: ToolContext) {
     const lookup = findOpenItem(context.session, args.itemId);
     if (!lookup.found) return { content: lookup.reason, isError: true };
 
@@ -126,4 +104,4 @@ export const recordAttempt: Tool<ToolContext> = {
 
     return { content: `Recorded: ${args.outcome}.` };
   },
-};
+});

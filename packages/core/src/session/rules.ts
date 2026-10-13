@@ -69,7 +69,7 @@ Tool results:
 Concepts:
 - conceptTerm names a durable topic someone could study across projects: "pointers", "linked list", "daemon process". Never a question, a sentence, or a task.
 - Always write conceptTerm in English, even when replying in another language.
-- Always pass parentTerm, naming a broader concept from the list below.
+- For a topic not in the list below, pass parentTerm naming a broader concept from it.
 - Reuse the terms listed below when they fit rather than coining a variant.
 
 Audit requests:

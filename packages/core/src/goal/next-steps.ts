@@ -23,17 +23,22 @@ export function deriveNextSteps(
   now: Date,
 ): NextStep[] {
   const skipped = new Set(goal.skipped);
+  const seen = new Set(learner.seen);
   const byConcept = new Map(
     learner.mastery.map((entry) => [entry.conceptId, entry]),
   );
   const candidates: Array<NextStep & { rank: number }> = [];
 
   for (const concept of registry.concepts) {
-    if (concept.mergedInto !== null) continue;
     if (concept.source === "seed") continue;
     if (skipped.has(concept.id)) continue;
 
-    const scored = score(concept.id, byConcept.get(concept.id), now);
+    const scored = score(
+      concept.id,
+      byConcept.get(concept.id),
+      seen.has(concept.id),
+      now,
+    );
     if (scored === null) continue;
 
     candidates.push(scored);
@@ -54,10 +59,17 @@ export function deriveNextSteps(
 function score(
   conceptId: ConceptId,
   entry: MasteryEntry | undefined,
+  seen: boolean,
   now: Date,
 ): (NextStep & { rank: number }) | null {
   if (entry === undefined) {
-    return { conceptId, level: 0, confidence: 0, reason: "untouched", rank: 1 };
+    return {
+      conceptId,
+      level: 0,
+      confidence: 0,
+      reason: seen ? "seen" : "untouched",
+      rank: seen ? 0.95 : 1,
+    };
   }
 
   if (entry.confidence < UNCERTAIN_THRESHOLD) {
