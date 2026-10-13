@@ -75,7 +75,3 @@ export function truncateOutput(text: string): string {
 
   return [...head, `[… ${omitted} lines omitted …]`, ...tail].join("\n").trim();
 }
-
-export function parseCommand(command: string): string[] {
-  return command.split(/\s+/).filter((part) => part.length > 0);
-}

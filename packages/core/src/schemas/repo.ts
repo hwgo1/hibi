@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { IsoDateTimeSchema, SlugSchema } from "../ids";
+import { TestRunnerSchema } from "./check";
 
 /**
  * Where a file came from. Only `user` code is evidence about the learner;
@@ -28,6 +29,8 @@ export const SubprojectSchema = z.object({
   entrypoints: z.array(z.string().min(1)).default([]),
   dependencies: z.array(z.string().min(1)).default([]),
   testCommand: z.string().min(1).optional(),
+  /** Runner hibi drives to run single tests. Absent when it cannot select them */
+  testRunner: TestRunnerSchema.optional(),
 });
 
 export type Subproject = z.infer<typeof SubprojectSchema>;

@@ -1,15 +1,24 @@
 import type { CommandResult } from "./runner";
+import type { RunSummary } from "./test-runners";
 
-export type VerifyOutcome = "pass" | "fail" | "environment" | "timeout";
+export type VerifyOutcome =
+  | "pass"
+  | "fail"
+  | "broken"
+  | "no-tests"
+  | "environment"
+  | "timeout";
 
 export interface VerifyReport {
   outcome: VerifyOutcome;
+  /** Tests ran and decided the result */
   isEvidence: boolean;
+  /** The learner's code ran; counts toward the hint ladder */
+  isAttempt: boolean;
   summary: string;
-  output: string;
 }
 
-/** Patterns in a failure that point at the environment rather than the code */
+/** Matched only when no test ran */
 const ENVIRONMENT_PATTERNS: RegExp[] = [
   /command not found/i,
   /: not found$/im,
@@ -21,58 +30,74 @@ const ENVIRONMENT_PATTERNS: RegExp[] = [
   /go: (?:cannot find|go\.mod file not found|downloading)/i,
   /could not resolve dependenc/i,
   /unable to access|could not resolve host|network is unreachable/i,
-  /no tests? (?:found|to run)/i,
   /error: linker .* not found/i,
   /failed to load config/i,
+  /could not determine executable to run/i,
+  /canceled due to missing packages/i,
 ];
 
+/** Zero tests is never a pass. Code that fails before any test runs is an attempt, not a result */
 export function classifyRun(
   result: CommandResult,
+  run: RunSummary,
+  noTests: readonly RegExp[],
   command: string,
 ): VerifyReport {
-  const output = `${result.stdout}\n${result.stderr}`;
-
   if (result.spawnError !== null) {
-    return {
-      outcome: "environment",
-      isEvidence: false,
-      summary: `could not run \`${command}\`: ${result.spawnError}`,
-      output: "",
-    };
+    return report(
+      "environment",
+      `could not run \`${command}\`: ${result.spawnError}`,
+    );
   }
-
   if (result.timedOut) {
-    return {
-      outcome: "timeout",
-      isEvidence: false,
-      summary: `\`${command}\` did not finish in time`,
-      output,
-    };
+    return report("timeout", `\`${command}\` did not finish in time`);
   }
 
-  if (result.exitCode === 0) {
-    return {
-      outcome: "pass",
-      isEvidence: true,
-      summary: `\`${command}\` passed in ${formatDuration(result.durationMs)}`,
-      output,
-    };
+  const counts = `${run.passed} passed, ${run.failed} failed`;
+
+  if (run.passed + run.failed > 0) {
+    if (run.failed > 0) return report("fail", `\`${command}\`: ${counts}`);
+    if (result.exitCode === 0) {
+      return report(
+        "pass",
+        `\`${command}\`: ${counts} in ${formatDuration(result.durationMs)}`,
+      );
+    }
+    return report(
+      "broken",
+      `\`${command}\`: ${counts}, but it exited with code ${result.exitCode}; something outside the tests failed`,
+    );
   }
 
-  if (ENVIRONMENT_PATTERNS.some((pattern) => pattern.test(output))) {
-    return {
-      outcome: "environment",
-      isEvidence: false,
-      summary: `\`${command}\` failed to run — this looks like a setup problem, not the user's code`,
-      output,
-    };
+  if (
+    result.exitCode === 0 ||
+    noTests.some((pattern) => pattern.test(run.output))
+  ) {
+    return report(
+      "no-tests",
+      `\`${command}\` ran no tests: the test does not exist yet, or the names do not match`,
+    );
   }
 
+  if (ENVIRONMENT_PATTERNS.some((pattern) => pattern.test(run.output))) {
+    return report(
+      "environment",
+      `\`${command}\` failed to run; this looks like a setup problem, not the user's code`,
+    );
+  }
+
+  return report(
+    "broken",
+    `\`${command}\` failed before any test ran (exit code ${result.exitCode}); the code likely does not compile`,
+  );
+}
+
+function report(outcome: VerifyOutcome, summary: string): VerifyReport {
   return {
-    outcome: "fail",
-    isEvidence: true,
-    summary: `\`${command}\` failed with exit code ${result.exitCode}`,
-    output,
+    outcome,
+    isEvidence: outcome === "pass" || outcome === "fail",
+    isAttempt: outcome !== "no-tests" && outcome !== "environment",
+    summary,
   };
 }
 

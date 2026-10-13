@@ -60,6 +60,26 @@ describe("indexRepo", () => {
     ]);
   });
 
+  test("a package in a Bun workspace runs its tests with Bun", async () => {
+    const model = await withRepo(
+      async (dir) => {
+        await mkdir(join(dir, "packages", "app"), { recursive: true });
+        await writeFile(join(dir, "bun.lock"), "{}");
+        await writeFile(
+          join(dir, "packages", "app", "package.json"),
+          '{"name":"app"}',
+        );
+        await writeFile(
+          join(dir, "packages", "app", "index.ts"),
+          "export {}\n",
+        );
+      },
+      (dir) => indexRepo(dir, NOW),
+    );
+
+    expect(model.subprojects[0]?.testRunner).toBe("bun");
+  });
+
   test("falls back to one subproject inferred from extensions", async () => {
     const model = await withRepo(
       async (dir) => {

@@ -13,7 +13,9 @@ import {
   nextStep,
   STEP_INSTRUCTIONS,
 } from "../policy/hint-ladder";
+import type { Check } from "../schemas/check";
 import type { ResolveIntent } from "../schemas/session";
+import { buildCheck, describeCheck } from "../verify/checks";
 import type { ToolContext } from "./context";
 import type { Tool } from "./registry";
 
@@ -204,13 +206,25 @@ export const demonstrateCode: Tool<ToolContext> = {
   },
 };
 
+const CheckArgs = z.object({
+  file: z.string().min(1).optional(),
+  tests: z.array(z.string().min(1)).optional(),
+  subpath: z.string().min(1).optional(),
+});
+
 const ExerciseArgs = z.object({
   conceptTerm: z.string().min(1),
   parentTerm: z.string().min(1).optional(),
   statement: z.string().min(1),
   targetFile: z.string().min(1).optional(),
+  check: CheckArgs.optional(),
 });
 
+/**
+ * Registers an exercise and, when the project allows it, the tests that decide
+ * it. An invalid check registers nothing, so a corrected retry never leaves a
+ * duplicate behind
+ */
 export const proposeExercise: Tool<ToolContext> = {
   definition: {
     name: "propose_exercise",
@@ -230,6 +244,29 @@ export const proposeExercise: Tool<ToolContext> = {
           description:
             "Repo-relative file where the user will write the solution.",
         },
+        check: {
+          type: "object",
+          description:
+            "The tests that decide the exercise. verify runs these and nothing else.",
+          properties: {
+            file: {
+              type: "string",
+              description: "Repo-relative test file.",
+            },
+            tests: {
+              type: "array",
+              items: { type: "string" },
+              description:
+                "Test names. Required for Go; Rust takes the full path, like tests::reverses.",
+            },
+            subpath: {
+              type: "string",
+              description:
+                "Subproject directory, when the repository has more than one.",
+            },
+          },
+          required: [],
+        },
       },
       required: ["conceptTerm", "parentTerm", "statement"],
     },
@@ -237,6 +274,27 @@ export const proposeExercise: Tool<ToolContext> = {
 
   async execute(rawArgs, context) {
     const args = ExerciseArgs.parse(rawArgs);
+
+    let check: Check | undefined;
+    let unchecked = "";
+    if (args.check !== undefined) {
+      const repo = await context.storage.loadRepoModel(
+        context.session.repoRoot,
+      );
+      const built = buildCheck(repo, args.check);
+      if (built.status === "invalid") {
+        return {
+          content: `Invalid check: ${built.reason}. Nothing was registered.`,
+          isError: true,
+        };
+      }
+      if (built.status === "ready") {
+        check = built.check;
+      } else {
+        unchecked = ` No check attached: ${built.reason}. Judge attempts with record_attempt.`;
+      }
+    }
+
     const outcome = resolve(context, args.conceptTerm, args.parentTerm);
 
     if (outcome.status === "rejected") {
@@ -255,6 +313,7 @@ export const proposeExercise: Tool<ToolContext> = {
       conceptId: outcome.concept.id,
       statement: args.statement,
       targetFile: args.targetFile,
+      check,
       createdAt: at,
       lastTouchedAt: at,
       status: "active",
@@ -268,8 +327,11 @@ export const proposeExercise: Tool<ToolContext> = {
       filePath: args.targetFile,
     });
 
+    const checked =
+      check === undefined ? "" : ` verify will run ${describeCheck(check)}.`;
+
     return {
-      content: `Exercise registered (${context.learner.preferences.exerciseSize} size). Present the statement to the user.`,
+      content: `Exercise registered (${context.learner.preferences.exerciseSize} size).${checked}${unchecked} Present the statement to the user.`,
     };
   },
 };

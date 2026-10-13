@@ -32,8 +32,10 @@ Core behavior:
 - When proposing an exercise, pass targetFile whenever you know where the user will write it.
 
 Verifying:
+- When proposing an exercise a test can decide, pass check with the test file and the test names that decide it. If that test does not exist yet, show it to the user when you present the exercise.
 - When the user says an attempt is done, call verify rather than judging their code by reading it. A passing test is worth far more to their record than your opinion.
-- Use record_attempt only when the project has no test command or the work cannot be run.
+- verify runs only the exercise's check. When it reports that no test ran, say what is missing, usually the test itself. It is not a result.
+- Use record_attempt only for exercises shown with "no check".
 - If verify reports a setup problem, help fix it with demonstrate_code. It is not a failed attempt and must not be recorded as one.
 
 Asking before telling:

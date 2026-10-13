@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import type { Intent } from "../schemas/session";
+import { findAttemptTarget } from "./attempt-target";
 import type { ToolContext } from "./context";
 import type { Tool } from "./registry";
 
@@ -74,23 +74,19 @@ const RecordArgs = z.object({
   note: z.string().optional(),
 });
 
-function attemptFile(
-  intent: Intent,
-  explicit: string | undefined,
-): string | undefined {
-  if (explicit !== undefined) return explicit;
-  return intent.kind === "exercise" ? intent.targetFile : undefined;
-}
-
+/** The model's verdict on an attempt. Exercises with a check are decided only by verify */
 export const recordAttempt: Tool<ToolContext> = {
   definition: {
     name: "record_attempt",
     description:
-      "Record how the user's own attempt at an exercise turned out. Never use it for environment or setup problems such as a missing compiler, an installation error or a wrong PATH.",
+      "Record how the user's own attempt at an exercise without a check turned out. Never use it for environment or setup problems such as a missing compiler, an installation error or a wrong PATH.",
     parameters: {
       type: "object",
       properties: {
-        intentId: { type: "string" },
+        intentId: {
+          type: "string",
+          description: "The exercise or its hint ladder.",
+        },
         outcome: { type: "string", enum: ["pass", "fail", "partial"] },
         filePath: {
           type: "string",
@@ -104,37 +100,35 @@ export const recordAttempt: Tool<ToolContext> = {
 
   async execute(rawArgs, context) {
     const args = RecordArgs.parse(rawArgs);
-    const intent = context.session.intents.find((i) => i.id === args.intentId);
-    if (intent === undefined) {
-      return { content: `unknown intent: ${args.intentId}`, isError: true };
+    const lookup = findAttemptTarget(context.session, args.intentId);
+    if (!lookup.found) return { content: lookup.reason, isError: true };
+
+    const { exercise, ladder } = lookup.target;
+    if (exercise.check !== undefined) {
+      return {
+        content:
+          "This exercise has a check: run verify instead of judging the attempt.",
+        isError: true,
+      };
     }
 
     const at = context.clock.now().toISOString();
-    intent.lastTouchedAt = at;
-    if (args.outcome === "pass") intent.status = "done";
+    exercise.lastTouchedAt = at;
+    if (args.outcome === "pass") exercise.status = "done";
 
-    const resolveIntent = context.session.intents.find(
-      (i) =>
-        i.kind === "resolve" &&
-        i.status === "active" &&
-        i.target.type === "exercise" &&
-        i.target.intentId === args.intentId,
-    );
-
-    if (resolveIntent?.kind === "resolve") {
-      resolveIntent.attempts += 1;
-      resolveIntent.lastTouchedAt = at;
-      if (args.outcome === "pass") resolveIntent.status = "done";
+    if (ladder !== undefined) {
+      ladder.attempts += 1;
+      ladder.lastTouchedAt = at;
+      if (args.outcome === "pass") ladder.status = "done";
     }
 
     context.pendingEvidence.push({
       kind: "attempt_submitted",
-      conceptId: intent.conceptId,
+      conceptId: exercise.conceptId,
       provenance: "model_judged",
       outcome: args.outcome,
-      helpDepth:
-        resolveIntent?.kind === "resolve" ? resolveIntent.step : undefined,
-      filePath: attemptFile(intent, args.filePath),
+      helpDepth: ladder?.step,
+      filePath: args.filePath ?? exercise.targetFile,
       note: args.note,
     });
 

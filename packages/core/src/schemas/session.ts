@@ -9,6 +9,7 @@ import {
   UnitIntervalSchema,
   UserIdSchema,
 } from "../ids";
+import { CheckSchema } from "./check";
 import { DisputeSchema, OpenQuizSchema } from "./quiz";
 import { OpenElicitationSchema, PendingPredictionSchema } from "./elicitation";
 
@@ -84,6 +85,8 @@ export const IntentSchema = z.discriminatedUnion("kind", [
     conceptId: ConceptIdSchema,
     statement: z.string().min(1),
     targetFile: z.string().min(1).optional(),
+    /** Tests that decide the exercise. Absent when no test can */
+    check: CheckSchema.optional(),
   }),
   z.object({
     ...IntentBase,
@@ -105,6 +108,7 @@ export const IntentSchema = z.discriminatedUnion("kind", [
 ]);
 
 export type Intent = z.infer<typeof IntentSchema>;
+export type ExerciseIntent = Extract<Intent, { kind: "exercise" }>;
 export type ResolveIntent = Extract<Intent, { kind: "resolve" }>;
 
 export const SESSION_STATE_SCHEMA_VERSION = 1;

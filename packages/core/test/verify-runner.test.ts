@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { parseCommand, runCommand, truncateOutput } from "../src/verify/runner";
+import { runCommand, truncateOutput } from "../src/verify/runner";
 
 async function inTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), "hibi-run-"));
@@ -61,15 +61,5 @@ describe("truncateOutput", () => {
     expect(truncated).toContain("line 199");
     expect(truncated).toContain("lines omitted");
     expect(truncated.split("\n").length).toBeLessThan(100);
-  });
-});
-
-describe("parseCommand", () => {
-  test("splits a manifest command into arguments", () => {
-    expect(parseCommand("go test ./...")).toEqual(["go", "test", "./..."]);
-  });
-
-  test("collapses extra whitespace", () => {
-    expect(parseCommand("  npm   test  ")).toEqual(["npm", "test"]);
   });
 });

@@ -4,6 +4,7 @@ import type { LearnerModel, MasteryEntry } from "../schemas/learner";
 import type { RepoModel } from "../schemas/repo";
 import type { Intent, SessionState } from "../schemas/session";
 import { STALE_INTENT_THRESHOLD_MS } from "../schemas/session";
+import { describeCheck } from "../verify/checks";
 import { TUTOR_RULES } from "./rules";
 
 /** Caps keeping the prompt bounded regardless of how much history exists. */
@@ -224,7 +225,11 @@ function describeIntent(
     return `${marker}${intent.id} demonstrated ${intent.conceptId}: ${intent.subject}${stale}`;
   }
   if (intent.kind === "exercise") {
-    return `${marker}${intent.id} exercise ${intent.conceptId}: ${intent.statement}${stale}`;
+    const check =
+      intent.check === undefined
+        ? " · no check"
+        : ` · check: ${describeCheck(intent.check)}`;
+    return `${marker}${intent.id} exercise ${intent.conceptId}: ${intent.statement}${check}${stale}`;
   }
   return (
     `${marker}${intent.id} resolve ${intent.conceptId} ` +

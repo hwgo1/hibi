@@ -136,7 +136,7 @@ async function buildSubprojects(
   for (const path of manifests.slice(0, LIMITS.subprojects)) {
     const separator = path.lastIndexOf("/");
     const dir = separator > 0 ? path.slice(0, separator) : root;
-    const info = await readManifest(path, dir);
+    const info = await readManifest(path, dir, root);
     if (info === null) continue;
 
     subprojects.push({
@@ -147,6 +147,7 @@ async function buildSubprojects(
       entrypoints: info.entrypoints,
       dependencies: info.dependencies,
       testCommand: info.testCommand,
+      testRunner: info.testRunner,
     });
   }
 

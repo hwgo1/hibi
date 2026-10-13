@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -90,6 +90,64 @@ describe("readManifest", () => {
     expect(
       await withFile("Gemfile", "source 'https://rubygems.org'", readManifest),
     ).toBeNull();
+  });
+});
+
+describe("test runner detection", () => {
+  const packageWith = (json: object) =>
+    withFile("package.json", JSON.stringify(json), readManifest);
+
+  test("go, cargo and pytest projects have a fixed runner", async () => {
+    const go = await withFile("go.mod", "module x\n\ngo 1.22\n", readManifest);
+    const cargo = await withFile(
+      "Cargo.toml",
+      '[package]\nname = "x"\n',
+      readManifest,
+    );
+    const python = await withFile(
+      "pyproject.toml",
+      '[project]\nname = "x"\n',
+      readManifest,
+    );
+
+    expect([go?.testRunner, cargo?.testRunner, python?.testRunner]).toEqual([
+      "go",
+      "cargo",
+      "pytest",
+    ]);
+  });
+
+  test("the test script names the JavaScript runner", async () => {
+    const runners = await Promise.all(
+      ["vitest run", "jest --ci", "bun test", "mocha"].map(async (test) => {
+        const info = await packageWith({ scripts: { test } });
+        return info?.testRunner;
+      }),
+    );
+
+    expect(runners).toEqual(["vitest", "jest", "bun", undefined]);
+  });
+
+  test("without a test script, a runner dependency decides", async () => {
+    const info = await packageWith({ devDependencies: { jest: "^29" } });
+    expect(info?.testRunner).toBe("jest");
+  });
+
+  test("a Bun lockfile at the workspace root makes Bun run a package without a script", async () => {
+    const root = await mkdtemp(join(tmpdir(), "hibi-manifest-"));
+    try {
+      const dir = join(root, "packages", "app");
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(root, "bun.lock"), "{}");
+      await writeFile(join(dir, "package.json"), '{"name":"app"}');
+
+      const info = await readManifest(join(dir, "package.json"), dir, root);
+
+      expect(info?.testRunner).toBe("bun");
+      expect(info?.testCommand).toBe("bun test");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 
