@@ -6,42 +6,26 @@ const MASTERY_ROWS = 15;
 
 export function formatState(session: SessionState): string {
   const lines: string[] = [];
-  const active = session.intents.find(
-    (intent) => intent.id === session.activeIntentId,
-  );
+  const active = session.items.find((item) => item.id === session.activeItemId);
 
   if (active === undefined) {
     lines.push(ui.dim("nothing active"));
-  } else if (active.kind === "resolve") {
-    lines.push(
-      `${active.conceptId} · step ${active.step}/3 · ${active.attempts} attempts`,
-    );
-  } else if (active.kind === "exercise") {
-    lines.push(`exercise · ${active.conceptId}`);
-    lines.push(ui.dim(`  ${active.statement}`));
-  } else if (active.kind === "demonstrate") {
-    lines.push(`showed · ${active.conceptId}`);
-    lines.push(ui.dim(`  ${active.subject}`));
   } else {
-    lines.push(`explaining · ${active.conceptId}`);
+    const ladder =
+      active.ladder === undefined ? "" : ` · step ${active.ladder.step}/3`;
+    lines.push(
+      `exercise · ${active.conceptId}${ladder} · ${active.attempts} attempts`,
+    );
+    lines.push(ui.dim(`  ${active.statement}`));
   }
 
-  const open = session.intents.filter(
-    (intent) => intent.status === "active" && intent.id !== active?.id,
+  const open = session.items.filter(
+    (item) => item.status === "active" && item.id !== active?.id,
   );
   if (open.length > 0) {
     lines.push(
       ui.dim(
-        `${open.length} other open: ${open.map((intent) => intent.conceptId).join(", ")}`,
-      ),
-    );
-  }
-
-  const stale = session.intents.filter((intent) => intent.status === "stale");
-  if (stale.length > 0) {
-    lines.push(
-      ui.dim(
-        `${stale.length} stale: ${stale.map((intent) => intent.conceptId).join(", ")}`,
+        `${open.length} other open: ${open.map((item) => item.conceptId).join(", ")}`,
       ),
     );
   }
@@ -55,15 +39,8 @@ export function formatState(session: SessionState): string {
     );
   }
 
-  const disputes = session.disputes.filter(
-    (dispute) => dispute.status === "open",
-  );
-  if (disputes.length > 0) {
-    lines.push(
-      ui.dim(
-        `disputed: ${disputes.map((dispute) => dispute.conceptId).join(", ")}`,
-      ),
-    );
+  if (session.dispute !== null) {
+    lines.push(ui.dim(`disputed: ${session.dispute.conceptId}`));
   }
 
   const findings = session.findings.filter(

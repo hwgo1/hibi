@@ -21,7 +21,8 @@ export const EVIDENCE_KINDS = [
   "audit_finding",
   "test_run",
   "external_code_detected",
-  "intent_abandoned",
+  "item_abandoned",
+  "mastery_disputed",
   "turn_retracted",
 ] as const;
 
@@ -72,6 +73,8 @@ export const EvidenceEventSchema = z.object({
   outcome: z.enum(["pass", "fail", "partial", "n/a"]).default("n/a"),
   /** Hint depth reached, when applicable. Higher depth credits less mastery */
   helpDepth: HintStepSchema.optional(),
+  /** The learner asked for the answer outright */
+  forced: z.boolean().optional(),
   /** Repo-relative file the event concerns. Language is derived from it */
   filePath: z.string().min(1).optional(),
   /** The learner's own confidence before the attempt, for calibration */

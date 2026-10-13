@@ -1,7 +1,7 @@
 import { z } from "zod";
 
-import { findAttemptTarget } from "./attempt-target";
 import type { ToolContext } from "./context";
+import { completeItem, findOpenItem } from "./items";
 import type { Tool } from "./registry";
 
 const LIST_LIMIT = 80;
@@ -68,7 +68,7 @@ export const readFile: Tool<ToolContext> = {
 };
 
 const RecordArgs = z.object({
-  intentId: z.string().min(1),
+  itemId: z.string().min(1),
   outcome: z.enum(["pass", "fail", "partial"]),
   filePath: z.string().min(1).optional(),
   note: z.string().optional(),
@@ -83,10 +83,7 @@ export const recordAttempt: Tool<ToolContext> = {
     parameters: {
       type: "object",
       properties: {
-        intentId: {
-          type: "string",
-          description: "The exercise or its hint ladder.",
-        },
+        itemId: { type: "string", description: "The exercise." },
         outcome: { type: "string", enum: ["pass", "fail", "partial"] },
         filePath: {
           type: "string",
@@ -94,17 +91,17 @@ export const recordAttempt: Tool<ToolContext> = {
         },
         note: { type: "string" },
       },
-      required: ["intentId", "outcome"],
+      required: ["itemId", "outcome"],
     },
   },
 
   async execute(rawArgs, context) {
     const args = RecordArgs.parse(rawArgs);
-    const lookup = findAttemptTarget(context.session, args.intentId);
+    const lookup = findOpenItem(context.session, args.itemId);
     if (!lookup.found) return { content: lookup.reason, isError: true };
 
-    const { exercise, ladder } = lookup.target;
-    if (exercise.check !== undefined) {
+    const { item } = lookup;
+    if (item.check !== undefined) {
       return {
         content:
           "This exercise has a check: run verify instead of judging the attempt.",
@@ -112,23 +109,18 @@ export const recordAttempt: Tool<ToolContext> = {
       };
     }
 
-    const at = context.clock.now().toISOString();
-    exercise.lastTouchedAt = at;
-    if (args.outcome === "pass") exercise.status = "done";
-
-    if (ladder !== undefined) {
-      ladder.attempts += 1;
-      ladder.lastTouchedAt = at;
-      if (args.outcome === "pass") ladder.status = "done";
-    }
+    item.lastTouchedAt = context.clock.now().toISOString();
+    item.attempts += 1;
+    if (args.outcome === "pass") completeItem(context.session, item);
 
     context.pendingEvidence.push({
       kind: "attempt_submitted",
-      conceptId: exercise.conceptId,
+      conceptId: item.conceptId,
       provenance: "model_judged",
       outcome: args.outcome,
-      helpDepth: ladder?.step,
-      filePath: args.filePath ?? exercise.targetFile,
+      helpDepth: item.ladder?.step,
+      forced: item.ladder?.forced,
+      filePath: args.filePath ?? item.targetFile,
       note: args.note,
     });
 

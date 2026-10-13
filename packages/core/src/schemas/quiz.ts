@@ -38,19 +38,8 @@ export const OpenQuizSchema = z.object({
   questions: z.array(QuizQuestionSchema).min(1),
   cursor: z.number().int().nonnegative(),
   askedAt: IsoDateTimeSchema,
-  disputeOf: ConceptIdSchema.optional(),
+  /** Set when the quiz settles an open dispute */
+  disputeWeight: UnitIntervalSchema.optional(),
 });
 
 export type OpenQuiz = z.infer<typeof OpenQuizSchema>;
-
-export const DISPUTE_SCHEMA_VERSION = 1;
-
-export const DisputeSchema = z.object({
-  schemaVersion: z.literal(DISPUTE_SCHEMA_VERSION),
-  conceptId: ConceptIdSchema,
-  disputedLevel: UnitIntervalSchema,
-  raisedAt: IsoDateTimeSchema,
-  status: z.enum(["open", "upheld", "overturned"]).default("open"),
-});
-
-export type Dispute = z.infer<typeof DisputeSchema>;

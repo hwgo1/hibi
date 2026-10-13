@@ -138,6 +138,39 @@ describe("computeMastery", () => {
     expect(shown.level).toBeLessThan(unaided.level);
   });
 
+  test("a solution the learner asked for credits less than one reached by the ladder", () => {
+    const climbed = entryFor(
+      computeMastery(registryWithGoroutines(), [event({ helpDepth: 3 })], NOW),
+      GOROUTINES,
+    )!;
+    const forced = entryFor(
+      computeMastery(
+        registryWithGoroutines(),
+        [event({ helpDepth: 3, forced: true })],
+        NOW,
+      ),
+      GOROUTINES,
+    )!;
+
+    expect(forced.level).toBeLessThan(climbed.level);
+  });
+
+  test("abandoning or disputing an item produces no mastery", () => {
+    const entries = computeMastery(
+      registryWithGoroutines(),
+      [
+        event({ kind: "item_abandoned", provenance: "system", outcome: "n/a" }),
+        event({
+          kind: "mastery_disputed",
+          provenance: "system",
+          outcome: "n/a",
+        }),
+      ],
+      NOW,
+    );
+    expect(entries).toHaveLength(0);
+  });
+
   test("system events produce no mastery", () => {
     const entries = computeMastery(
       registryWithGoroutines(),

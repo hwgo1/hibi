@@ -11,7 +11,6 @@ import {
   QuizResponseSchema,
   type QuizQuestion,
 } from "../schemas/quiz";
-import { DISPUTE_SCHEMA_VERSION } from "../schemas/quiz";
 import type { ToolContext } from "./context";
 import type { Tool } from "./registry";
 
@@ -126,7 +125,10 @@ export const askQuiz: Tool<ToolContext> = {
       questions,
       cursor: 0,
       askedAt: context.clock.now().toISOString(),
-      disputeOf: pendingDispute(context, outcome.concept.id),
+      disputeWeight:
+        context.session.dispute?.conceptId === outcome.concept.id
+          ? context.session.dispute.weight
+          : undefined,
     };
 
     return { content: renderQuestion(questions[0]!, 1, questions.length) };
@@ -184,10 +186,7 @@ export const answerQuiz: Tool<ToolContext> = {
           : "incorrect";
 
     const scored = scoreResponse(response, question.options.length);
-    const disputeFactor =
-      quiz.disputeOf === undefined
-        ? 1
-        : disputeWeight(priorDisputes(context, quiz.disputeOf) - 1);
+    const disputeFactor = quiz.disputeWeight ?? 1;
 
     context.pendingEvidence.push({
       kind: response === "unknown" ? "self_assessment" : "quiz_answered",
@@ -203,7 +202,7 @@ export const answerQuiz: Tool<ToolContext> = {
 
     if (next === undefined) {
       context.session.openQuiz = null;
-      settleDispute(context, quiz.disputeOf);
+      if (quiz.disputeWeight !== undefined) context.session.dispute = null;
       return {
         content: `${verdict(response, question)}\n\nThe quiz is finished. Summarize how it went.`,
       };
@@ -253,19 +252,20 @@ export const disputeMastery: Tool<ToolContext> = {
     context.registry = outcome.registry;
 
     const conceptId = outcome.concept.id;
-    const entry = context.learner.mastery.find(
-      (mastery) => mastery.conceptId === conceptId,
-    );
+    const prior = await priorDisputes(context, conceptId);
 
-    context.session.disputes.push({
-      schemaVersion: DISPUTE_SCHEMA_VERSION,
+    context.session.dispute = {
       conceptId,
-      disputedLevel: entry?.level ?? 0,
+      weight: disputeWeight(prior),
       raisedAt: context.clock.now().toISOString(),
-      status: "open",
+    };
+    context.pendingEvidence.push({
+      kind: "mastery_disputed",
+      conceptId,
+      provenance: "system",
     });
 
-    const repeat = priorDisputes(context, conceptId) > 1;
+    const repeat = prior > 0;
 
     return {
       content:
@@ -331,38 +331,20 @@ function verdict(
     .join("\n");
 }
 
-function priorDisputes(context: ToolContext, conceptId: ConceptId): number {
-  return context.session.disputes.filter(
-    (dispute) => dispute.conceptId === conceptId,
-  ).length;
-}
-
-function pendingDispute(
+async function priorDisputes(
   context: ToolContext,
   conceptId: ConceptId,
-): ConceptId | undefined {
-  const open = context.session.disputes.find(
-    (dispute) => dispute.conceptId === conceptId && dispute.status === "open",
+): Promise<number> {
+  const logged = await context.storage.queryEvidence({
+    userId: context.session.userId,
+    conceptId,
+  });
+  const isDispute = (event: { kind: string }): boolean =>
+    event.kind === "mastery_disputed";
+  return (
+    logged.filter(isDispute).length +
+    context.pendingEvidence.filter(
+      (event) => event.conceptId === conceptId && isDispute(event),
+    ).length
   );
-  return open?.conceptId;
-}
-
-function settleDispute(
-  context: ToolContext,
-  conceptId: ConceptId | undefined,
-): void {
-  if (conceptId === undefined) return;
-
-  const dispute = context.session.disputes.find(
-    (entry) => entry.conceptId === conceptId && entry.status === "open",
-  );
-  if (dispute === undefined) return;
-
-  const current = context.learner.mastery.find(
-    (entry) => entry.conceptId === conceptId,
-  );
-  dispute.status =
-    current !== undefined && current.level > dispute.disputedLevel
-      ? "overturned"
-      : "upheld";
 }

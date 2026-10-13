@@ -115,7 +115,7 @@ function scoreOf(event: EvidenceEvent): number | null {
   const multiplier =
     event.helpDepth === undefined
       ? 1
-      : creditMultiplier(event.helpDepth, false);
+      : creditMultiplier(event.helpDepth, event.forced === true);
 
   switch (event.outcome) {
     case "pass":

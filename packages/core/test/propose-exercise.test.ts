@@ -61,10 +61,13 @@ describe("propose_exercise with a check", () => {
     expect(result.content).toContain(
       "verify will run go · strings/rev_test.go · TestReverse",
     );
-    expect(context.session.intents[0]).toMatchObject({
+    expect(context.session.items[0]).toMatchObject({
       kind: "exercise",
+      status: "active",
+      attempts: 0,
       check: { runner: "go", cwd: ".", tests: ["TestReverse"] },
     });
+    expect(context.session.activeItemId).toBe(context.session.items[0]!.id);
   });
 
   test("an invalid check registers nothing, so a retry leaves no duplicate", async () => {
@@ -74,7 +77,7 @@ describe("propose_exercise with a check", () => {
     const result = await propose(context, { file: "strings/rev_test.go" });
 
     expect(result.isError).toBe(true);
-    expect(context.session.intents).toHaveLength(0);
+    expect(context.session.items).toHaveLength(0);
     expect(context.registry.concepts).toHaveLength(conceptsBefore);
   });
 
@@ -84,10 +87,7 @@ describe("propose_exercise with a check", () => {
     const result = await propose(context, { tests: ["TestReverse"] });
 
     expect(result.content).toContain("No check attached");
-    expect(context.session.intents[0]).toMatchObject({ kind: "exercise" });
-    expect(
-      context.session.intents[0]?.kind === "exercise" &&
-        context.session.intents[0].check,
-    ).toBeUndefined();
+    expect(context.session.items[0]).toMatchObject({ kind: "exercise" });
+    expect(context.session.items[0]?.check).toBeUndefined();
   });
 });

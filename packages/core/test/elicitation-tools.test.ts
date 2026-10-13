@@ -1,7 +1,14 @@
 import { describe, expect, test } from "bun:test";
 
 import { buildToolRegistry, type ToolContext } from "../src/tools";
-import { testContext } from "./fixtures";
+import { testContext as baseContext, testItem } from "./fixtures";
+
+function testContext(): ToolContext {
+  const ctx = baseContext();
+  ctx.session.items = [testItem()];
+  ctx.session.activeItemId = ctx.session.items[0]!.id;
+  return ctx;
+}
 
 interface ToolOutcome {
   content: string;
@@ -80,6 +87,21 @@ describe("ask_learner", () => {
     expect(ctx.session.openElicitation).toBeNull();
   });
 
+  test("does not ask for a prediction without an open exercise", async () => {
+    const ctx = baseContext();
+    const result = await ask(ctx);
+
+    expect(result.content).toContain("Not now");
+    expect(ctx.session.openElicitation).toBeNull();
+  });
+
+  test("ties the question to the active exercise", async () => {
+    const ctx = testContext();
+    await askOrFail(ctx);
+
+    expect(ctx.session.openElicitation?.itemId).toBe(ctx.session.items[0]!.id);
+  });
+
   test("rejects a concept term that is a question", async () => {
     const ctx = testContext();
     const result = await buildToolRegistry().execute(
@@ -99,7 +121,7 @@ describe("ask_learner", () => {
 });
 
 describe("record_answer", () => {
-  test("holds a prediction rather than writing it immediately", async () => {
+  test("holds a prediction on the exercise rather than writing it immediately", async () => {
     const ctx = testContext();
     await askOrFail(ctx);
 
@@ -110,8 +132,8 @@ describe("record_answer", () => {
     );
 
     expect(ctx.session.openElicitation).toBeNull();
-    expect(ctx.session.pendingPrediction?.predicted).toBe("pass");
-    expect(ctx.session.pendingPrediction?.selfConfidence).toBe(0.8);
+    expect(ctx.session.items[0]?.prediction?.predicted).toBe("pass");
+    expect(ctx.session.items[0]?.prediction?.selfConfidence).toBe(0.8);
     expect(ctx.pendingEvidence).toHaveLength(0);
   });
 

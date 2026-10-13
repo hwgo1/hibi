@@ -33,7 +33,6 @@ import {
   type ClientRequest,
   type ServerEvent,
 } from "./protocol";
-import { sweepStaleIntents } from "./staleness";
 import { TurnQueue } from "./turn-queue";
 
 const LOCAL_USER = "local" as UserId;
@@ -114,23 +113,13 @@ export class Daemon {
     process.exit(0);
   }
 
-  /**
-   * Loads the repository's session and flags intents that went cold while the
-   * daemon was down, so the tutor can raise them on the next turn
-   */
   private async loadSession(): Promise<SessionState> {
     const id = repoKey(this.options.repoRoot) as SessionId;
     const existing = await this.storage.loadSession(id);
-    const now = this.clock.now();
-
-    if (existing === null) {
-      return newSessionState(id, LOCAL_USER, this.options.repoRoot, now);
-    }
-
-    if (sweepStaleIntents(existing, now) > 0) {
-      await this.storage.saveSession(existing);
-    }
-    return existing;
+    return (
+      existing ??
+      newSessionState(id, LOCAL_USER, this.options.repoRoot, this.clock.now())
+    );
   }
 
   /**
@@ -438,11 +427,11 @@ export class Daemon {
     this.transcript.push({ role: "assistant", content: assistantText });
     this.transcript = this.transcript.slice(-TRANSCRIPT_CAP);
 
-    const active = this.session.intents.find(
-      (i) => i.id === this.session?.activeIntentId,
+    const active = this.session.items.find(
+      (item) => item.id === this.session?.activeItemId,
     );
-    if (active?.kind === "resolve") {
-      this.broadcast({ type: "step", step: active.step });
+    if (active?.ladder !== undefined) {
+      this.broadcast({ type: "step", step: active.ladder.step });
     }
 
     this.broadcast({ type: "turn_end" });

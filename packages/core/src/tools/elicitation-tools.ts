@@ -3,9 +3,10 @@ import { z } from "zod";
 import type { ConceptId } from "../concepts";
 import { resolveConcept, validateConceptTerm } from "../concept-resolver";
 import { shouldElicit, type ElicitationSeam } from "../elicitation/policy";
-import type { IntentId } from "../ids";
 import { ELICITATION_SCHEMA_VERSION } from "../schemas/elicitation";
+import type { ItemId } from "../ids";
 import type { ToolContext } from "./context";
+import { findOpenItem } from "./items";
 import type { Tool } from "./registry";
 
 const AskArgs = z.object({
@@ -13,7 +14,7 @@ const AskArgs = z.object({
   conceptTerm: z.string().min(1),
   parentTerm: z.string().min(1).optional(),
   question: z.string().min(1),
-  intentId: z.string().min(1).optional(),
+  itemId: z.string().min(1).optional(),
 });
 
 export const askLearner: Tool<ToolContext> = {
@@ -42,7 +43,7 @@ export const askLearner: Tool<ToolContext> = {
           description:
             "The question, in the learner's language. Must be specific to their code or the concept at hand, never generic.",
         },
-        intentId: {
+        itemId: {
           type: "string",
           description: "The exercise this concerns, when there is one.",
         },
@@ -71,6 +72,13 @@ export const askLearner: Tool<ToolContext> = {
       };
     }
 
+    const item = findOpenItem(context.session, args.itemId);
+    if (decision.kind === "prediction" && !item.found) {
+      return {
+        content: `Not now: ${item.reason}. Continue without asking.`,
+      };
+    }
+
     const outcome = resolveConcept(context.registry, args.conceptTerm, {
       parentHint: args.parentTerm as ConceptId | undefined,
       now: context.clock.now(),
@@ -90,7 +98,7 @@ export const askLearner: Tool<ToolContext> = {
       schemaVersion: ELICITATION_SCHEMA_VERSION,
       kind: decision.kind,
       conceptId: outcome.concept.id,
-      intentId: args.intentId as IntentId | undefined,
+      itemId: item.found ? item.item.id : (args.itemId as ItemId | undefined),
       question: args.question,
       askedAt: context.clock.now().toISOString(),
     };
@@ -161,9 +169,14 @@ export const recordAnswer: Tool<ToolContext> = {
     context.session.consecutiveIgnored = 0;
 
     if (open.kind === "prediction") {
-      context.session.pendingPrediction = {
-        conceptId: open.conceptId,
-        intentId: open.intentId,
+      const lookup = findOpenItem(context.session, open.itemId);
+      if (!lookup.found) {
+        return {
+          content: `No open exercise to attach the prediction to: ${lookup.reason}.`,
+          isError: true,
+        };
+      }
+      lookup.item.prediction = {
         predicted: args.predicted ?? "pass",
         selfConfidence: args.selfConfidence,
         madeAt: context.clock.now().toISOString(),

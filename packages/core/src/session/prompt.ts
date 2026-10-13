@@ -2,8 +2,8 @@ import type { Concept, ConceptRegistry } from "../concepts";
 import type { Workspace } from "../ports/workspace";
 import type { LearnerModel, MasteryEntry } from "../schemas/learner";
 import type { RepoModel } from "../schemas/repo";
-import type { Intent, SessionState } from "../schemas/session";
-import { STALE_INTENT_THRESHOLD_MS } from "../schemas/session";
+import type { SessionState, WorkItem } from "../schemas/session";
+import { STALE_ITEM_THRESHOLD_MS } from "../schemas/session";
 import { describeCheck } from "../verify/checks";
 import { TUTOR_RULES } from "./rules";
 
@@ -12,7 +12,7 @@ const LIMITS = {
   masteryEntries: 12,
   concepts: 40,
   recurringErrors: 5,
-  intents: 6,
+  items: 6,
   findings: 8,
   contextFileBytes: 12_000,
 } as const;
@@ -159,20 +159,20 @@ function rank(concept: Concept, known: Set<string>): number {
 
 /**
  * The session is what makes a reference like "this" resolvable and what
- * carries the ladder across turns. Stale intents are surfaced so the tutor can
+ * carries the ladder across turns. Stale items are surfaced so the tutor can
  * ask once whether they were finished or dropped.
  */
 function renderSession(session: SessionState, now: Date): string {
   const lines = [`<session>`];
 
-  const intents = session.intents
-    .filter((intent) => intent.status === "active" || intent.status === "stale")
-    .slice(-LIMITS.intents);
+  const items = session.items
+    .filter((item) => item.status === "active")
+    .slice(-LIMITS.items);
 
-  if (intents.length > 0) {
-    lines.push(`intents:`);
-    for (const intent of intents) {
-      lines.push(`  ${describeIntent(intent, session.activeIntentId, now)}`);
+  if (items.length > 0) {
+    lines.push(`items:`);
+    for (const item of items) {
+      lines.push(`  ${describeItem(item, session.activeItemId, now)}`);
     }
   }
 
@@ -198,9 +198,9 @@ function renderSession(session: SessionState, now: Date): string {
     );
   }
 
-  if (session.pendingPrediction !== null) {
+  if (session.dispute !== null) {
     lines.push(
-      `predicted ${session.pendingPrediction.predicted} for ${session.pendingPrediction.conceptId}, outcome not yet known`,
+      `${session.dispute.conceptId} is disputed: settle it with a quiz or an exercise on it`,
     );
   }
 
@@ -208,40 +208,30 @@ function renderSession(session: SessionState, now: Date): string {
   return lines.join("\n");
 }
 
-function describeIntent(
-  intent: Intent,
+function describeItem(
+  item: WorkItem,
   activeId: string | null,
   now: Date,
 ): string {
-  const marker = intent.id === activeId ? "* " : "  ";
-  const stale = isStale(intent, now)
-    ? " STALE — ask once if this was finished or dropped"
-    : "";
+  const marker = item.id === activeId ? "* " : "  ";
+  const check =
+    item.check === undefined
+      ? " · no check"
+      : ` · check: ${describeCheck(item.check)}`;
+  const ladder =
+    item.ladder === undefined
+      ? ""
+      : ` · step ${item.ladder.step}/3, ${item.ladder.hintsGiven} hints`;
+  const prediction =
+    item.prediction === undefined
+      ? ""
+      : ` · predicted ${item.prediction.predicted}`;
+  const stale =
+    now.getTime() - Date.parse(item.lastTouchedAt) >= STALE_ITEM_THRESHOLD_MS
+      ? " STALE — ask once if this was finished or dropped"
+      : "";
 
-  if (intent.kind === "explain") {
-    return `${marker}${intent.id} explain ${intent.conceptId}${stale}`;
-  }
-  if (intent.kind === "demonstrate") {
-    return `${marker}${intent.id} demonstrated ${intent.conceptId}: ${intent.subject}${stale}`;
-  }
-  if (intent.kind === "exercise") {
-    const check =
-      intent.check === undefined
-        ? " · no check"
-        : ` · check: ${describeCheck(intent.check)}`;
-    return `${marker}${intent.id} exercise ${intent.conceptId}: ${intent.statement}${check}${stale}`;
-  }
-  return (
-    `${marker}${intent.id} resolve ${intent.conceptId} ` +
-    `step ${intent.step}/3, ${intent.attempts} attempts, ${intent.hintsGiven} hints${stale}`
-  );
-}
-
-function isStale(intent: Intent, now: Date): boolean {
-  return (
-    now.getTime() - Date.parse(intent.lastTouchedAt) >=
-    STALE_INTENT_THRESHOLD_MS
-  );
+  return `${marker}${item.id} exercise ${item.conceptId}: ${item.statement}${check} · ${item.attempts} attempts${ladder}${prediction}${stale}`;
 }
 
 function renderRepo(repo: RepoModel | null): string {

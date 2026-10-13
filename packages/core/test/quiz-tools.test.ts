@@ -150,8 +150,14 @@ describe("dispute_mastery", () => {
       ctx,
     );
 
-    expect(ctx.session.disputes).toHaveLength(1);
-    expect(ctx.session.disputes[0]!.disputedLevel).toBe(0.2);
+    expect(ctx.session.dispute).toMatchObject({
+      conceptId: "concurrency",
+      weight: 1,
+    });
+    expect(ctx.pendingEvidence.at(-1)).toMatchObject({
+      kind: "mastery_disputed",
+      provenance: "system",
+    });
     expect(ctx.learner.mastery[0]!.level).toBe(0.2);
   });
 
@@ -171,9 +177,28 @@ describe("dispute_mastery", () => {
     );
 
     expect(second.content).toContain("disputed before");
+    expect(ctx.session.dispute!.weight).toBeLessThan(1);
   });
 
-  test("a quiz opened after a dispute is linked to it", async () => {
+  test("counts disputes from earlier sessions in the log", async () => {
+    const ctx = testContext();
+    ctx.storage = {
+      queryEvidence: async () => [
+        { kind: "mastery_disputed", conceptId: "concurrency" },
+      ],
+    } as unknown as ToolContext["storage"];
+
+    const result = await buildToolRegistry().execute(
+      "dispute_mastery",
+      { conceptTerm: "concurrency" },
+      ctx,
+    );
+
+    expect(result.content).toContain("disputed before");
+    expect(ctx.session.dispute!.weight).toBeLessThan(1);
+  });
+
+  test("a quiz opened after a dispute carries its weight and settles it", async () => {
     const ctx = testContext();
     const registry = buildToolRegistry();
 
@@ -183,7 +208,9 @@ describe("dispute_mastery", () => {
       ctx,
     );
     await openQuiz(ctx);
+    expect(ctx.session.openQuiz?.disputeWeight).toBe(1);
 
-    expect(ctx.session.openQuiz?.disputeOf).toBe("concurrency" as ConceptId);
+    await registry.execute("answer_quiz", { optionId: "b" }, ctx);
+    expect(ctx.session.dispute).toBeNull();
   });
 });

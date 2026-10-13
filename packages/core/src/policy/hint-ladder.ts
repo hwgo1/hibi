@@ -1,5 +1,5 @@
 import type { Clock } from "../ports/storage";
-import type { HintStep, ResolveIntent } from "../schemas/session";
+import type { HintStep, Ladder, WorkItem } from "../schemas/session";
 
 /**
  * What the tutor may reveal at each step. The model receives one of these
@@ -11,23 +11,14 @@ export const STEP_INSTRUCTIONS: Record<HintStep, string> = {
   3: "Show the correction and explain why it works. Then offer a short variation of the same problem, changed in context but not in structure, for the user to try without looking back.",
 };
 
-/** Signals available when a resolve intent is first created */
+/** Signals available when the first hint is requested */
 export interface EntryContext {
-  hasExistingCode: boolean;
-  questionIsSpecific: boolean;
   masteryLevel: number | null;
-  selfReportedAttempts: number;
+  attempts: number;
 }
 
 export function deriveEntryStep(context: EntryContext): HintStep {
-  if (!context.hasExistingCode) return 1;
-
-  let score = 0;
-  if (context.questionIsSpecific) score += 2;
-  if (context.selfReportedAttempts >= 2) score += 1;
-  if ((context.masteryLevel ?? 0) >= 0.6) score += 1;
-
-  return score >= 3 ? 2 : 1;
+  return context.attempts >= 2 || (context.masteryLevel ?? 0) >= 0.6 ? 2 : 1;
 }
 
 export const ESCALATION = {
@@ -46,46 +37,47 @@ export const EFFORT_FLOOR = {
 } as const;
 
 export interface EffortInput {
-  intent: ResolveIntent;
+  item: WorkItem;
   clock: Clock;
 }
 
 export type EffortCheck = { met: true } | { met: false; remainingMs: number };
 
 export function effortFloorMet(input: EffortInput): EffortCheck {
-  const { intent, clock } = input;
+  const { item, clock } = input;
 
-  if (intent.hintsGiven > 0) return { met: true };
-  if (intent.attempts >= EFFORT_FLOOR.orAfterAttempts) return { met: true };
+  if ((item.ladder?.hintsGiven ?? 0) > 0) return { met: true };
+  if (item.attempts >= EFFORT_FLOOR.orAfterAttempts) return { met: true };
 
-  const elapsed = clock.now().getTime() - Date.parse(intent.createdAt);
+  const elapsed = clock.now().getTime() - Date.parse(item.createdAt);
   if (elapsed >= EFFORT_FLOOR.minimumMs) return { met: true };
 
   return { met: false, remainingMs: EFFORT_FLOOR.minimumMs - elapsed };
 }
 
 export interface EscalationInput {
-  intent: ResolveIntent;
+  ladder: Ladder;
+  attempts: number;
   /** Set when the user asked to skip ahead */
   userRequested: boolean;
   clock: Clock;
 }
 
 export function nextStep(input: EscalationInput): HintStep {
-  const { intent, userRequested, clock } = input;
+  const { ladder, attempts, userRequested, clock } = input;
 
   if (userRequested) return 3;
-  if (intent.hintsGiven === 0) return intent.step;
+  if (ladder.hintsGiven === 0) return ladder.step;
 
-  const attemptsSinceHint = intent.attempts - intent.attemptsAtLastHint;
+  const attemptsSinceHint = attempts - ladder.attemptsAtLastHint;
   const stuckLongEnough =
-    intent.lastHintAt !== undefined &&
-    clock.now().getTime() - Date.parse(intent.lastHintAt) >= ESCALATION.stuckMs;
+    ladder.lastHintAt !== undefined &&
+    clock.now().getTime() - Date.parse(ladder.lastHintAt) >= ESCALATION.stuckMs;
 
   if (attemptsSinceHint >= ESCALATION.attemptsPerStep || stuckLongEnough) {
-    return climb(intent.step);
+    return climb(ladder.step);
   }
-  return intent.step;
+  return ladder.step;
 }
 
 function climb(step: HintStep): HintStep {

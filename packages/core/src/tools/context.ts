@@ -27,6 +27,7 @@ export interface PendingEvidence {
   confidence?: number;
   outcome?: "pass" | "fail" | "partial" | "n/a";
   helpDepth?: HintStep;
+  forced?: boolean;
   selfConfidence?: number;
   predicted?: "pass" | "fail";
   filePath?: string;

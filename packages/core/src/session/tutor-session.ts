@@ -16,7 +16,10 @@ import type { EvidenceEvent } from "../schemas/evidence";
 import { EVIDENCE_EVENT_SCHEMA_VERSION } from "../schemas/evidence";
 import type { LearnerModel } from "../schemas/learner";
 import { DEFAULT_TEACHING_PREFERENCES } from "../schemas/learner";
-import type { SessionState } from "../schemas/session";
+import {
+  SESSION_STATE_SCHEMA_VERSION,
+  type SessionState,
+} from "../schemas/session";
 import type { ToolContext } from "../tools";
 import { buildToolRegistry } from "../tools";
 import type { ToolRegistry } from "../tools/registry";
@@ -242,6 +245,7 @@ export class TutorSession {
         confidence: pending.confidence ?? 1,
         outcome: pending.outcome ?? "n/a",
         helpDepth: pending.helpDepth,
+        forced: pending.forced,
         selfConfidence: pending.selfConfidence,
         predicted: pending.predicted,
         filePath: pending.filePath,
@@ -284,20 +288,19 @@ export function newSessionState(
 ): SessionState {
   const at = now.toISOString();
   return {
-    schemaVersion: 1,
+    schemaVersion: SESSION_STATE_SCHEMA_VERSION,
     sessionId,
     userId,
     repoRoot,
     createdAt: at,
     updatedAt: at,
-    intents: [],
-    activeIntentId: null,
+    items: [],
+    activeItemId: null,
     findings: [],
     contextFiles: [],
     openQuiz: null,
-    disputes: [],
+    dispute: null,
     openElicitation: null,
-    pendingPrediction: null,
     lastElicitedTurn: null,
     elicitationsAsked: 0,
     consecutiveIgnored: 0,

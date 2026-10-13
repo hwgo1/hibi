@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 import { ConceptIdSchema } from "../concepts";
-import { IntentIdSchema, IsoDateTimeSchema, UnitIntervalSchema } from "../ids";
+import { IsoDateTimeSchema, ItemIdSchema } from "../ids";
 
 export const ELICITATION_KINDS = [
   "prior_knowledge",
@@ -18,19 +18,9 @@ export const OpenElicitationSchema = z.object({
   schemaVersion: z.literal(ELICITATION_SCHEMA_VERSION),
   kind: ElicitationKindSchema,
   conceptId: ConceptIdSchema,
-  intentId: IntentIdSchema.optional(),
+  itemId: ItemIdSchema.optional(),
   question: z.string().min(1),
   askedAt: IsoDateTimeSchema,
 });
 
 export type OpenElicitation = z.infer<typeof OpenElicitationSchema>;
-
-export const PendingPredictionSchema = z.object({
-  conceptId: ConceptIdSchema,
-  intentId: IntentIdSchema.optional(),
-  predicted: z.enum(["pass", "fail"]),
-  selfConfidence: UnitIntervalSchema.optional(),
-  madeAt: IsoDateTimeSchema,
-});
-
-export type PendingPrediction = z.infer<typeof PendingPredictionSchema>;

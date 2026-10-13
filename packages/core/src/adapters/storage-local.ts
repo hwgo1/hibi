@@ -22,8 +22,11 @@ import type { LearnerModel } from "../schemas/learner";
 import { LearnerModelSchema } from "../schemas/learner";
 import type { RepoModel } from "../schemas/repo";
 import { RepoModelSchema } from "../schemas/repo";
-import type { SessionState } from "../schemas/session";
-import { SessionStateSchema } from "../schemas/session";
+import {
+  SESSION_STATE_SCHEMA_VERSION,
+  SessionStateSchema,
+  type SessionState,
+} from "../schemas/session";
 
 /**
  * Filesystem layout under the hibi home directory.
@@ -113,6 +116,14 @@ async function readJson<T>(
   return parse(JSON.parse(text));
 }
 
+/** A session from another build starts over; durable state lives outside it */
+function parseSession(raw: unknown): SessionState | null {
+  const version = (raw as { schemaVersion?: unknown } | null)?.schemaVersion;
+  return version === SESSION_STATE_SCHEMA_VERSION
+    ? SessionStateSchema.parse(raw)
+    : null;
+}
+
 export class StorageLocal implements Storage {
   constructor(private readonly home: string = join(homedir(), ".hibi")) {}
 
@@ -165,9 +176,7 @@ export class StorageLocal implements Storage {
     const index = await this.readSessionIndex();
     const repoRoot = index[sessionId];
     if (repoRoot === undefined) return null;
-    return readJson(join(this.repoDir(repoRoot), "session.json"), (raw) =>
-      SessionStateSchema.parse(raw),
-    );
+    return readJson(join(this.repoDir(repoRoot), "session.json"), parseSession);
   }
 
   async saveSession(state: SessionState): Promise<void> {

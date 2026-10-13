@@ -1,10 +1,11 @@
 import { seedRegistry } from "../src/concepts";
-import type { SessionId, UserId } from "../src/ids";
+import type { ConceptId } from "../src/concepts";
+import type { ItemId, SessionId, UserId } from "../src/ids";
 import {
   DEFAULT_TEACHING_PREFERENCES,
   type LearnerModel,
 } from "../src/schemas/learner";
-import type { SessionState } from "../src/schemas/session";
+import type { SessionState, WorkItem } from "../src/schemas/session";
 import type { ToolContext } from "../src/tools";
 
 export const TEST_NOW = new Date("2026-01-01T12:00:00.000Z");
@@ -13,20 +14,19 @@ export const TEST_USER = "local" as UserId;
 export function testSession(now: Date = TEST_NOW): SessionState {
   const at = now.toISOString();
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sessionId: "s1" as SessionId,
     userId: TEST_USER,
     repoRoot: "/tmp/repo",
     createdAt: at,
     updatedAt: at,
-    intents: [],
-    activeIntentId: null,
+    items: [],
+    activeItemId: null,
     findings: [],
     contextFiles: [],
     openQuiz: null,
-    disputes: [],
+    dispute: null,
     openElicitation: null,
-    pendingPrediction: null,
     lastElicitedTurn: null,
     elicitationsAsked: 0,
     consecutiveIgnored: 0,
@@ -55,8 +55,28 @@ export function testContext(now: Date = TEST_NOW): ToolContext {
     learner: testLearner(now),
     registry: seedRegistry(now),
     workspace: {} as ToolContext["workspace"],
-    storage: {} as ToolContext["storage"],
+    storage: {
+      queryEvidence: async () => [],
+    } as unknown as ToolContext["storage"],
     clock: { now: () => now },
     pendingEvidence: [],
+  };
+}
+
+export function testItem(
+  overrides: Partial<WorkItem> = {},
+  now: Date = TEST_NOW,
+): WorkItem {
+  const at = now.toISOString();
+  return {
+    id: "itm1" as ItemId,
+    kind: "exercise",
+    conceptId: "worker-pool" as ConceptId,
+    statement: "build a worker pool",
+    attempts: 0,
+    createdAt: at,
+    lastTouchedAt: at,
+    status: "active",
+    ...overrides,
   };
 }

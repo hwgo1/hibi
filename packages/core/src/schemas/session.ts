@@ -3,15 +3,15 @@ import { z } from "zod";
 import { ConceptIdSchema } from "../concepts";
 import {
   FindingIdSchema,
-  IntentIdSchema,
   IsoDateTimeSchema,
+  ItemIdSchema,
   SessionIdSchema,
   UnitIntervalSchema,
   UserIdSchema,
 } from "../ids";
 import { CheckSchema } from "./check";
-import { DisputeSchema, OpenQuizSchema } from "./quiz";
-import { OpenElicitationSchema, PendingPredictionSchema } from "./elicitation";
+import { OpenElicitationSchema } from "./elicitation";
+import { OpenQuizSchema } from "./quiz";
 
 /** Locates a snippet without relying on line numbers, which drafts as soon as the user edits above the anchor.
  * `contentHash` detects a stale anchor; `snippet` allows re-locating it
@@ -46,7 +46,7 @@ export const FindingSchema = z.object({
 
 export type Finding = z.infer<typeof FindingSchema>;
 
-export const STALE_INTENT_THRESHOLD_MS = 72 * 60 * 60 * 1000;
+export const STALE_ITEM_THRESHOLD_MS = 72 * 60 * 60 * 1000;
 
 export const HINT_STEPS = [1, 2, 3] as const;
 export const HintStepSchema = z.union([
@@ -56,62 +56,57 @@ export const HintStepSchema = z.union([
 ]);
 export type HintStep = z.infer<typeof HintStepSchema>;
 
-const IntentBase = {
-  id: IntentIdSchema,
+/** Created by the first hint; attempts live on the item so none are lost before it */
+export const LadderSchema = z.object({
+  entryStep: HintStepSchema,
+  step: HintStepSchema,
+  hintsGiven: z.number().int().nonnegative().default(0),
+  attemptsAtLastHint: z.number().int().nonnegative().default(0),
+  lastHintAt: IsoDateTimeSchema.optional(),
+  /** The learner asked for the answer outright */
+  forced: z.boolean().default(false),
+});
+
+export type Ladder = z.infer<typeof LadderSchema>;
+
+export const PredictionSchema = z.object({
+  predicted: z.enum(["pass", "fail"]),
+  selfConfidence: UnitIntervalSchema.optional(),
+  madeAt: IsoDateTimeSchema,
+});
+
+export type Prediction = z.infer<typeof PredictionSchema>;
+
+export const WorkItemSchema = z.object({
+  id: ItemIdSchema,
+  kind: z.literal("exercise"),
+  conceptId: ConceptIdSchema,
+  statement: z.string().min(1),
+  targetFile: z.string().min(1).optional(),
+  /** Absent when no test can decide the item */
+  check: CheckSchema.optional(),
+  attempts: z.number().int().nonnegative().default(0),
+  ladder: LadderSchema.optional(),
+  /** Consumed by the next verify */
+  prediction: PredictionSchema.optional(),
   createdAt: IsoDateTimeSchema,
   lastTouchedAt: IsoDateTimeSchema,
-  /**
-   * `stale` is distinct from `abandoned`: abandonment is a statement the user
-   * made, staleness is an absence the system observed
-   */
-  status: z.enum(["active", "done", "abandoned", "stale"]).default("active"),
-};
+  status: z.enum(["active", "done", "abandoned"]).default("active"),
+});
 
-export const IntentSchema = z.discriminatedUnion("kind", [
-  z.object({
-    ...IntentBase,
-    kind: z.literal("explain"),
-    conceptId: ConceptIdSchema,
-  }),
-  z.object({
-    ...IntentBase,
-    kind: z.literal("demonstrate"),
-    conceptId: ConceptIdSchema,
-    subject: z.string().min(1),
-  }),
-  z.object({
-    ...IntentBase,
-    kind: z.literal("exercise"),
-    conceptId: ConceptIdSchema,
-    statement: z.string().min(1),
-    targetFile: z.string().min(1).optional(),
-    /** Tests that decide the exercise. Absent when no test can */
-    check: CheckSchema.optional(),
-  }),
-  z.object({
-    ...IntentBase,
-    kind: z.literal("resolve"),
-    conceptId: ConceptIdSchema,
-    /** What is being worked on: an exercise hibi set or a finding it made */
-    target: z.discriminatedUnion("type", [
-      z.object({ type: z.literal("finding"), findingId: FindingIdSchema }),
-      z.object({ type: z.literal("exercise"), intentId: IntentIdSchema }),
-    ]),
-    entryStep: HintStepSchema,
-    step: HintStepSchema,
-    attempts: z.number().int().nonnegative().default(0),
-    hintsGiven: z.number().int().nonnegative().default(0),
-    attemptsAtLastHint: z.number().int().nonnegative().default(0),
-    lastHintAt: IsoDateTimeSchema.optional(),
-    userForcedDisclosure: z.boolean().default(false),
-  }),
-]);
+export type WorkItem = z.infer<typeof WorkItemSchema>;
 
-export type Intent = z.infer<typeof IntentSchema>;
-export type ExerciseIntent = Extract<Intent, { kind: "exercise" }>;
-export type ResolveIntent = Extract<Intent, { kind: "resolve" }>;
+/** Settled by the next quiz on the concept or by an item on it closing */
+export const OpenDisputeSchema = z.object({
+  conceptId: ConceptIdSchema,
+  /** Discount for disputing the same concept again, counted over the whole log */
+  weight: UnitIntervalSchema,
+  raisedAt: IsoDateTimeSchema,
+});
 
-export const SESSION_STATE_SCHEMA_VERSION = 1;
+export type OpenDispute = z.infer<typeof OpenDisputeSchema>;
+
+export const SESSION_STATE_SCHEMA_VERSION = 2;
 
 export const SessionStateSchema = z.object({
   schemaVersion: z.literal(SESSION_STATE_SCHEMA_VERSION),
@@ -120,14 +115,13 @@ export const SessionStateSchema = z.object({
   repoRoot: z.string().min(1),
   createdAt: IsoDateTimeSchema,
   updatedAt: IsoDateTimeSchema,
-  intents: z.array(IntentSchema).default([]),
-  activeIntentId: IntentIdSchema.nullable().default(null),
+  items: z.array(WorkItemSchema).default([]),
+  activeItemId: ItemIdSchema.nullable().default(null),
   findings: z.array(FindingSchema).default([]),
   contextFiles: z.array(z.string().min(1)).default([]),
   openQuiz: OpenQuizSchema.nullable().default(null),
-  disputes: z.array(DisputeSchema).default([]),
+  dispute: OpenDisputeSchema.nullable().default(null),
   openElicitation: OpenElicitationSchema.nullable().default(null),
-  pendingPrediction: PendingPredictionSchema.nullable().default(null),
   lastElicitedTurn: z.number().int().nonnegative().nullable().default(null),
   elicitationsAsked: z.number().int().nonnegative().default(0),
   consecutiveIgnored: z.number().int().nonnegative().default(0),

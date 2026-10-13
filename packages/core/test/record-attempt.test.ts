@@ -1,57 +1,13 @@
 import { describe, expect, test } from "bun:test";
 
-import type { ConceptId } from "../src/concepts";
-import type { IntentId } from "../src/ids";
-import type { Check } from "../src/schemas/check";
-import type {
-  ExerciseIntent,
-  Intent,
-  ResolveIntent,
-} from "../src/schemas/session";
+import type { ItemId } from "../src/ids";
+import type { WorkItem } from "../src/schemas/session";
 import { buildToolRegistry, type ToolContext } from "../src/tools";
-import { TEST_NOW, testContext } from "./fixtures";
+import { testContext, testItem } from "./fixtures";
 
-const CONCEPT = "worker-pool" as ConceptId;
-const AT = TEST_NOW.toISOString();
-
-function exercise(id: string, check?: Check): ExerciseIntent {
-  return {
-    id: id as IntentId,
-    kind: "exercise",
-    conceptId: CONCEPT,
-    statement: "build a worker pool",
-    check,
-    createdAt: AT,
-    lastTouchedAt: AT,
-    status: "active",
-  };
-}
-
-function ladder(
-  id: string,
-  exerciseId: string,
-  step: 1 | 2 | 3,
-): ResolveIntent {
-  return {
-    id: id as IntentId,
-    kind: "resolve",
-    conceptId: CONCEPT,
-    target: { type: "exercise", intentId: exerciseId as IntentId },
-    entryStep: 1,
-    step,
-    attempts: 0,
-    hintsGiven: 1,
-    attemptsAtLastHint: 0,
-    createdAt: AT,
-    lastTouchedAt: AT,
-    status: "active",
-    userForcedDisclosure: false,
-  };
-}
-
-function contextWith(...intents: Intent[]): ToolContext {
+function contextWith(...items: WorkItem[]): ToolContext {
   const context = testContext();
-  context.session.intents.push(...intents);
+  context.session.items.push(...items);
   return context;
 }
 
@@ -68,17 +24,17 @@ async function exerciseIn(
     },
     ctx,
   );
-  return ctx.session.intents[0]!.id;
+  return ctx.session.items[0]!.id;
 }
 
 describe("record_attempt", () => {
   test("falls back to the exercise's target file", async () => {
     const ctx = testContext();
-    const intentId = await exerciseIn(ctx, "pool/pool.go");
+    const itemId = await exerciseIn(ctx, "pool/pool.go");
 
     await buildToolRegistry().execute(
       "record_attempt",
-      { intentId, outcome: "pass" },
+      { itemId, outcome: "pass" },
       ctx,
     );
 
@@ -87,11 +43,11 @@ describe("record_attempt", () => {
 
   test("an explicit file wins over the exercise target", async () => {
     const ctx = testContext();
-    const intentId = await exerciseIn(ctx, "pool/pool.go");
+    const itemId = await exerciseIn(ctx, "pool/pool.go");
 
     await buildToolRegistry().execute(
       "record_attempt",
-      { intentId, outcome: "fail", filePath: "pool/worker.go" },
+      { itemId, outcome: "fail", filePath: "pool/worker.go" },
       ctx,
     );
 
@@ -100,11 +56,11 @@ describe("record_attempt", () => {
 
   test("records model-judged provenance", async () => {
     const ctx = testContext();
-    const intentId = await exerciseIn(ctx);
+    const itemId = await exerciseIn(ctx);
 
     await buildToolRegistry().execute(
       "record_attempt",
-      { intentId, outcome: "pass" },
+      { itemId, outcome: "pass" },
       ctx,
     );
 
@@ -113,82 +69,67 @@ describe("record_attempt", () => {
 
   test("refuses an exercise with a check: only verify decides it", async () => {
     const context = contextWith(
-      exercise("ex1", {
-        kind: "test",
-        runner: "go",
-        cwd: ".",
-        tests: ["TestPool"],
+      testItem({
+        check: { kind: "test", runner: "go", cwd: ".", tests: ["TestPool"] },
       }),
     );
 
     const result = await buildToolRegistry().execute(
       "record_attempt",
-      { intentId: "ex1", outcome: "pass" },
+      { itemId: "itm1", outcome: "pass" },
       context,
     );
 
     expect(result.isError).toBe(true);
     expect(context.pendingEvidence).toHaveLength(0);
-    expect(context.session.intents[0]?.status).toBe("active");
+    expect(context.session.items[0]?.status).toBe("active");
   });
 
-  test("accepts the ladder id and counts the attempt on that ladder only", async () => {
+  test("counts the attempt on that item only and credits its ladder depth", async () => {
     const context = contextWith(
-      exercise("ex1"),
-      ladder("lad1", "ex1", 1),
-      exercise("ex2"),
-      ladder("lad2", "ex2", 2),
+      testItem({ id: "itm1" as ItemId }),
+      testItem({
+        id: "itm2" as ItemId,
+        ladder: {
+          entryStep: 1,
+          step: 2,
+          hintsGiven: 2,
+          attemptsAtLastHint: 0,
+          forced: true,
+        },
+      }),
     );
 
     await buildToolRegistry().execute(
       "record_attempt",
-      { intentId: "lad2", outcome: "fail" },
+      { itemId: "itm2", outcome: "fail" },
       context,
     );
 
-    const attempts = context.session.intents
-      .filter((intent): intent is ResolveIntent => intent.kind === "resolve")
-      .map((intent) => intent.attempts);
-    expect(attempts).toEqual([0, 1]);
-    expect(context.pendingEvidence[0]?.helpDepth).toBe(2);
-  });
-
-  test("refuses an intent that is not an exercise", async () => {
-    const context = contextWith({
-      id: "exp1" as IntentId,
-      kind: "explain",
-      conceptId: CONCEPT,
-      createdAt: AT,
-      lastTouchedAt: AT,
-      status: "active",
+    expect(context.session.items.map((item) => item.attempts)).toEqual([0, 1]);
+    expect(context.pendingEvidence[0]).toMatchObject({
+      helpDepth: 2,
+      forced: true,
     });
-
-    const result = await buildToolRegistry().execute(
-      "record_attempt",
-      { intentId: "exp1", outcome: "pass" },
-      context,
-    );
-
-    expect(result.isError).toBe(true);
-    expect(context.session.intents[0]?.status).toBe("active");
   });
 
   test("a passed exercise does not collect evidence twice", async () => {
-    const context = contextWith(exercise("ex1"));
+    const context = contextWith(testItem());
     const registry = buildToolRegistry();
 
     await registry.execute(
       "record_attempt",
-      { intentId: "ex1", outcome: "pass" },
+      { itemId: "itm1", outcome: "pass" },
       context,
     );
     const again = await registry.execute(
       "record_attempt",
-      { intentId: "ex1", outcome: "pass" },
+      { itemId: "itm1", outcome: "pass" },
       context,
     );
 
     expect(again.isError).toBe(true);
+    expect(context.session.items[0]?.status).toBe("done");
     expect(context.pendingEvidence).toHaveLength(1);
   });
 });

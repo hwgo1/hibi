@@ -6,7 +6,7 @@ import {
   validateConceptTerm,
   type ResolveOutcome,
 } from "../concept-resolver";
-import type { IntentId } from "../ids";
+import type { ItemId } from "../ids";
 import {
   deriveEntryStep,
   effortFloorMet,
@@ -14,9 +14,10 @@ import {
   STEP_INSTRUCTIONS,
 } from "../policy/hint-ladder";
 import type { Check } from "../schemas/check";
-import type { ResolveIntent } from "../schemas/session";
+import type { HintStep, Ladder } from "../schemas/session";
 import { buildCheck, describeCheck } from "../verify/checks";
 import type { ToolContext } from "./context";
+import { findOpenItem } from "./items";
 import type { Tool } from "./registry";
 
 type ResolveResult = ResolveOutcome | { status: "rejected"; reason: string };
@@ -97,19 +98,6 @@ export const explainConcept: Tool<ToolContext> = {
       };
     }
 
-    const at = touch(context);
-    const id = newId("int") as IntentId;
-
-    context.session.intents.push({
-      id,
-      kind: "explain",
-      conceptId: outcome.concept.id,
-      createdAt: at,
-      lastTouchedAt: at,
-      status: "active",
-    });
-    context.session.activeIntentId = id;
-
     context.pendingEvidence.push({
       kind: "concept_explained",
       conceptId: outcome.concept.id,
@@ -118,7 +106,7 @@ export const explainConcept: Tool<ToolContext> = {
 
     const depth = context.learner.preferences.theoryDepth;
     return {
-      content: `Concept: ${outcome.concept.canonicalName}. Explain it at ${depth} depth, in the user's language. No ladder applies here.`,
+      content: `Concept: ${outcome.concept.canonicalName}. Explain it at ${depth} depth, in the user's language. No ladder applies here. Close with one check of understanding: a single ask_quiz question or a small propose_exercise.`,
     };
   },
 };
@@ -164,11 +152,8 @@ export const demonstrateCode: Tool<ToolContext> = {
     }
 
     const conceptId = outcome.concept.id;
-    const exerciseOpen = context.session.intents.some(
-      (intent) =>
-        intent.status === "active" &&
-        (intent.kind === "exercise" || intent.kind === "resolve") &&
-        intent.conceptId === conceptId,
+    const exerciseOpen = context.session.items.some(
+      (item) => item.status === "active" && item.conceptId === conceptId,
     );
 
     if (exerciseOpen) {
@@ -178,20 +163,6 @@ export const demonstrateCode: Tool<ToolContext> = {
         isError: true,
       };
     }
-
-    const at = touch(context);
-    const id = newId("int") as IntentId;
-
-    context.session.intents.push({
-      id,
-      kind: "demonstrate",
-      conceptId,
-      subject: args.subject,
-      createdAt: at,
-      lastTouchedAt: at,
-      status: "active",
-    });
-    context.session.activeIntentId = id;
 
     context.pendingEvidence.push({
       kind: "code_demonstrated",
@@ -305,20 +276,21 @@ export const proposeExercise: Tool<ToolContext> = {
     }
 
     const at = touch(context);
-    const id = newId("int") as IntentId;
+    const id = newId("itm") as ItemId;
 
-    context.session.intents.push({
+    context.session.items.push({
       id,
       kind: "exercise",
       conceptId: outcome.concept.id,
       statement: args.statement,
       targetFile: args.targetFile,
       check,
+      attempts: 0,
       createdAt: at,
       lastTouchedAt: at,
       status: "active",
     });
-    context.session.activeIntentId = id;
+    context.session.activeItemId = id;
 
     context.pendingEvidence.push({
       kind: "exercise_proposed",
@@ -337,7 +309,7 @@ export const proposeExercise: Tool<ToolContext> = {
 };
 
 const HintArgs = z.object({
-  targetIntentId: z.string().min(1),
+  itemId: z.string().min(1),
   userRequestedFullAnswer: z.boolean().optional(),
 });
 
@@ -349,9 +321,9 @@ export const giveHint: Tool<ToolContext> = {
     parameters: {
       type: "object",
       properties: {
-        targetIntentId: {
+        itemId: {
           type: "string",
-          description: "The exercise or finding being worked on.",
+          description: "The exercise being worked on.",
         },
         userRequestedFullAnswer: {
           type: "boolean",
@@ -359,62 +331,18 @@ export const giveHint: Tool<ToolContext> = {
             "True only when the user explicitly asked for the answer.",
         },
       },
-      required: ["targetIntentId"],
+      required: ["itemId"],
     },
   },
 
   async execute(rawArgs, context) {
     const args = HintArgs.parse(rawArgs);
-    const at = touch(context);
+    const lookup = findOpenItem(context.session, args.itemId);
+    if (!lookup.found) return { content: lookup.reason, isError: true };
 
-    const source = context.session.intents.find(
-      (i) => i.id === args.targetIntentId,
-    );
-    if (source === undefined) {
-      return {
-        content: `unknown intent: ${args.targetIntentId}`,
-        isError: true,
-      };
-    }
-
-    let resolveIntent = findResolveIntent(context, args.targetIntentId);
-
-    if (resolveIntent === undefined) {
-      const mastery = context.learner.mastery.find(
-        (m) => m.conceptId === source.conceptId,
-      );
-      const attempts = attemptsThisTurn(context, source.conceptId);
-
-      const entryStep = deriveEntryStep({
-        hasExistingCode: true,
-        questionIsSpecific: true,
-        masteryLevel: mastery?.level ?? null,
-        selfReportedAttempts: attempts,
-      });
-
-      resolveIntent = {
-        id: newId("int") as IntentId,
-        kind: "resolve",
-        conceptId: source.conceptId,
-        target: { type: "exercise", intentId: args.targetIntentId as IntentId },
-        entryStep,
-        step: entryStep,
-        attempts,
-        hintsGiven: 0,
-        attemptsAtLastHint: 0,
-        createdAt: at,
-        lastTouchedAt: at,
-        status: "active",
-        userForcedDisclosure: false,
-      };
-      context.session.intents.push(resolveIntent);
-    }
-
+    const { item } = lookup;
     const forced = args.userRequestedFullAnswer === true;
-    const effort = effortFloorMet({
-      intent: resolveIntent,
-      clock: context.clock,
-    });
+    const effort = effortFloorMet({ item, clock: context.clock });
 
     if (!effort.met && !forced) {
       const minutes = Math.ceil(effort.remainingMs / 60_000);
@@ -426,56 +354,55 @@ export const giveHint: Tool<ToolContext> = {
       };
     }
 
+    const at = touch(context);
+    const ladder =
+      item.ladder ??
+      startLadder(
+        deriveEntryStep({
+          masteryLevel:
+            context.learner.mastery.find(
+              (entry) => entry.conceptId === item.conceptId,
+            )?.level ?? null,
+          attempts: item.attempts,
+        }),
+      );
+
     const step = nextStep({
-      intent: resolveIntent,
+      ladder,
+      attempts: item.attempts,
       userRequested: forced,
       clock: context.clock,
     });
 
-    resolveIntent.step = step;
-    resolveIntent.hintsGiven += 1;
-    resolveIntent.attemptsAtLastHint = resolveIntent.attempts;
-    resolveIntent.lastHintAt = at;
-    resolveIntent.lastTouchedAt = at;
-    if (forced) resolveIntent.userForcedDisclosure = true;
-    context.session.activeIntentId = resolveIntent.id;
+    item.ladder = {
+      ...ladder,
+      step,
+      hintsGiven: ladder.hintsGiven + 1,
+      attemptsAtLastHint: item.attempts,
+      lastHintAt: at,
+      forced: ladder.forced || forced,
+    };
+    item.lastTouchedAt = at;
+    context.session.activeItemId = item.id;
 
     context.pendingEvidence.push({
       kind: "hint_given",
-      conceptId: resolveIntent.conceptId,
+      conceptId: item.conceptId,
       provenance: "system",
       helpDepth: step,
+      forced,
     });
 
     return { content: `Step ${step}. ${STEP_INSTRUCTIONS[step]}` };
   },
 };
 
-function attemptsThisTurn(context: ToolContext, conceptId: ConceptId): number {
-  return context.pendingEvidence.filter(
-    (evidence) =>
-      evidence.conceptId === conceptId &&
-      (evidence.kind === "attempt_submitted" || evidence.kind === "test_run"),
-  ).length;
-}
-
-function findResolveIntent(
-  context: ToolContext,
-  targetId: string,
-): ResolveIntent | undefined {
-  for (const intent of context.session.intents) {
-    if (intent.kind !== "resolve") continue;
-    if (intent.status !== "active") continue;
-    if (
-      intent.target.type === "exercise" &&
-      intent.target.intentId === targetId
-    )
-      return intent;
-    if (
-      intent.target.type === "finding" &&
-      intent.target.findingId === targetId
-    )
-      return intent;
-  }
-  return undefined;
+function startLadder(entryStep: HintStep): Ladder {
+  return {
+    entryStep,
+    step: entryStep,
+    hintsGiven: 0,
+    attemptsAtLastHint: 0,
+    forced: false,
+  };
 }

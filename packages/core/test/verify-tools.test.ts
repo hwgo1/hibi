@@ -12,11 +12,11 @@ import { join } from "node:path";
 
 import { WorkspaceFs } from "../src/adapters/workspace-fs";
 import type { ConceptId } from "../src/concepts";
-import type { IntentId } from "../src/ids";
+import type { ItemId } from "../src/ids";
 import type { Check } from "../src/schemas/check";
-import type { ExerciseIntent, ResolveIntent } from "../src/schemas/session";
+import type { WorkItem } from "../src/schemas/session";
 import { buildToolRegistry, type ToolContext } from "../src/tools";
-import { TEST_NOW, testContext } from "./fixtures";
+import { TEST_NOW, testContext, testItem } from "./fixtures";
 
 /** Each case spawns a real `bun test` against a throwaway project */
 setDefaultTimeout(20_000);
@@ -53,52 +53,33 @@ function bunCheck(tests: string[], file = "rev.test.ts"): Check {
   return { kind: "test", runner: "bun", cwd: ".", file, tests };
 }
 
-function exercise(id: string, check?: Check): ExerciseIntent {
-  return {
-    id: id as IntentId,
-    kind: "exercise",
+function exercise(
+  id: string,
+  check?: Check,
+  overrides: Partial<WorkItem> = {},
+): WorkItem {
+  return testItem({
+    id: id as ItemId,
     conceptId: CONCEPT,
     statement: "reverse a string",
     check,
-    createdAt: AT,
-    lastTouchedAt: AT,
-    status: "active",
-  };
+    ...overrides,
+  });
 }
 
-function ladder(id: string, exerciseId: string): ResolveIntent {
-  return {
-    id: id as IntentId,
-    kind: "resolve",
-    conceptId: CONCEPT,
-    target: { type: "exercise", intentId: exerciseId as IntentId },
-    entryStep: 1,
-    step: 1,
-    attempts: 0,
-    hintsGiven: 1,
-    attemptsAtLastHint: 0,
-    createdAt: AT,
-    lastTouchedAt: AT,
-    status: "active",
-    userForcedDisclosure: false,
-  };
-}
-
-function contextWith(
-  ...intents: Array<ExerciseIntent | ResolveIntent>
-): ToolContext {
+function contextWith(...items: WorkItem[]): ToolContext {
   const context = testContext();
   context.session.repoRoot = root;
   context.workspace = new WorkspaceFs(root);
-  context.session.intents.push(...intents);
-  context.session.activeIntentId = intents[0]?.id ?? null;
+  context.session.items.push(...items);
+  context.session.activeItemId = items[0]?.id ?? null;
   return context;
 }
 
-function verify(context: ToolContext, intentId?: string) {
+function verify(context: ToolContext, itemId?: string) {
   return buildToolRegistry().execute(
     "verify",
-    intentId === undefined ? {} : { intentId },
+    itemId === undefined ? {} : { itemId },
     context,
   );
 }
@@ -118,7 +99,7 @@ describe("verify", () => {
         filePath: "rev.test.ts",
       }),
     ]);
-    expect(context.session.intents[0]?.status).toBe("done");
+    expect(context.session.items[0]?.status).toBe("done");
   });
 
   test("records a fail and keeps the exercise open", async () => {
@@ -129,7 +110,7 @@ describe("verify", () => {
     await verify(context);
 
     expect(context.pendingEvidence[0]?.outcome).toBe("fail");
-    expect(context.session.intents[0]?.status).toBe("active");
+    expect(context.session.items[0]?.status).toBe("active");
   });
 
   test("a check that matches no test is not a result", async () => {
@@ -139,7 +120,7 @@ describe("verify", () => {
 
     expect(result.content).toContain("ran no tests");
     expect(context.pendingEvidence).toHaveLength(0);
-    expect(context.session.intents[0]?.status).toBe("active");
+    expect(context.session.items[0]?.status).toBe("active");
   });
 
   test("a missing test file is reported before anything runs", async () => {
@@ -161,53 +142,50 @@ describe("verify", () => {
     expect(context.pendingEvidence).toHaveLength(0);
   });
 
-  test("attempts land on the ladder of the verified exercise only", async () => {
+  test("attempts land on the verified exercise only, with its ladder depth", async () => {
     const context = contextWith(
       exercise("ex1", bunCheck(["fails on purpose"])),
-      ladder("lad1", "ex1"),
-      exercise("ex2", bunCheck(["fails on purpose"])),
-      ladder("lad2", "ex2"),
+      exercise("ex2", bunCheck(["fails on purpose"]), {
+        ladder: {
+          entryStep: 1,
+          step: 2,
+          hintsGiven: 1,
+          attemptsAtLastHint: 0,
+          forced: false,
+        },
+      }),
     );
 
     await verify(context, "ex2");
 
-    const attempts = context.session.intents
-      .filter((intent): intent is ResolveIntent => intent.kind === "resolve")
-      .map((intent) => intent.attempts);
-    expect(attempts).toEqual([0, 1]);
-    expect(context.pendingEvidence[0]?.helpDepth).toBe(1);
+    expect(context.session.items.map((item) => item.attempts)).toEqual([0, 1]);
+    expect(context.pendingEvidence[0]?.helpDepth).toBe(2);
   });
 
-  test("accepts the ladder id in place of the exercise id", async () => {
+  test("a closed exercise is not verified again", async () => {
     const context = contextWith(
-      exercise("ex1", bunCheck(["reverses a word"])),
-      ladder("lad1", "ex1"),
+      exercise("ex1", bunCheck(["reverses a word"]), { status: "done" }),
     );
 
-    await verify(context, "lad1");
+    const result = await verify(context);
 
-    expect(context.session.intents.map((intent) => intent.status)).toEqual([
-      "done",
-      "done",
-    ]);
+    expect(result.isError).toBe(true);
+    expect(context.pendingEvidence).toHaveLength(0);
   });
 
   test("a prediction is consumed only by a run that decided something", async () => {
-    const pending = exercise("ex1", bunCheck(["does not exist"]));
+    const pending = exercise("ex1", bunCheck(["does not exist"]), {
+      prediction: { predicted: "pass", madeAt: AT },
+    });
     const context = contextWith(pending);
-    context.session.pendingPrediction = {
-      conceptId: CONCEPT,
-      predicted: "pass",
-      madeAt: AT,
-    };
 
     await verify(context);
-    expect(context.session.pendingPrediction).not.toBeNull();
+    expect(pending.prediction).toBeDefined();
 
     pending.check = bunCheck(["fails on purpose"]);
     const result = await verify(context);
 
-    expect(context.session.pendingPrediction).toBeNull();
+    expect(pending.prediction).toBeUndefined();
     expect(context.pendingEvidence[0]?.predicted).toBe("pass");
     expect(result.content).toContain("They predicted pass and it failed");
   });

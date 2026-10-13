@@ -50,8 +50,18 @@ describe("deriveSignals", () => {
   });
 
   test("notices a learner who often asks for the answer", () => {
-    const signals = deriveSignals(repeat(10, { helpDepth: 3 }), NOW);
+    const signals = deriveSignals(
+      repeat(10, { helpDepth: 3, forced: true }),
+      NOW,
+    );
     expect(signals.find((signal) => signal.key === "disclosure")).toBeDefined();
+  });
+
+  test("reaching step 3 by climbing the ladder is not asking for the answer", () => {
+    const signals = deriveSignals(repeat(10, { helpDepth: 3 }), NOW);
+    expect(
+      signals.find((signal) => signal.key === "disclosure"),
+    ).toBeUndefined();
   });
 
   test("notices overestimation from calibration", () => {

@@ -81,7 +81,7 @@ describe("TutorSession", () => {
     });
   });
 
-  test("executes a tool call and persists the resulting intent", async () => {
+  test("executes a tool call and persists the resulting item", async () => {
     const script = [
       toolCall("propose_exercise", {
         conceptTerm: "linked list",
@@ -95,8 +95,9 @@ describe("TutorSession", () => {
       await drain(tutor.turn(state, [], "me da um exercicio"));
 
       const saved = await storage.loadSession("s1" as SessionId);
-      expect(saved?.intents).toHaveLength(1);
-      expect(saved?.intents[0]!.kind).toBe("exercise");
+      expect(saved?.items).toHaveLength(1);
+      expect(saved?.items[0]!.kind).toBe("exercise");
+      expect(saved?.activeItemId).toBe(saved!.items[0]!.id);
       expect(saved?.turnCount).toBe(1);
     });
   });
@@ -125,7 +126,8 @@ describe("TutorSession", () => {
         statement: "implemente remove",
       }),
       finish,
-      toolCall("give_hint", { targetIntentId: "PLACEHOLDER" }),
+      toolCall("record_attempt", { itemId: "PLACEHOLDER", outcome: "fail" }),
+      toolCall("give_hint", { itemId: "PLACEHOLDER" }),
       finish,
     ];
 
@@ -134,16 +136,17 @@ describe("TutorSession", () => {
       await drain(tutor.turn(state, [], "exercicio"));
 
       const afterFirst = (await storage.loadSession("s1" as SessionId))!;
-      const exerciseId = afterFirst.intents[0]!.id;
-      script[2] = toolCall("give_hint", { targetIntentId: exerciseId });
+      const itemId = afterFirst.items[0]!.id;
+      script[2] = toolCall("record_attempt", { itemId, outcome: "fail" });
+      script[3] = toolCall("give_hint", { itemId });
 
       await drain(tutor.turn(afterFirst, [], "travei"));
 
       const afterSecond = (await storage.loadSession("s1" as SessionId))!;
-      const resolveIntent = afterSecond.intents.find(
-        (i) => i.kind === "resolve",
-      );
-      expect(resolveIntent).toBeDefined();
+      expect(afterSecond.items[0]).toMatchObject({
+        attempts: 1,
+        ladder: { hintsGiven: 1, attemptsAtLastHint: 1 },
+      });
       expect(afterSecond.turnCount).toBe(2);
     });
   });

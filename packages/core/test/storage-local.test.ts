@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { StorageLocal } from "../src/adapters/storage-local";
 import type { SessionId, UserId } from "../src/ids";
 import type { EvidenceEvent } from "../src/schemas/evidence";
+import { testSession } from "./fixtures";
 
 const USER = "local" as UserId;
 
@@ -94,6 +95,32 @@ describe("StorageLocal", () => {
 
       const found = await storage.queryEvidence({ userId: USER });
       expect(found).toHaveLength(1);
+    });
+  });
+
+  test("round-trips a session", async () => {
+    await withTempStorage(async (storage) => {
+      const session = testSession();
+      await storage.saveSession(session);
+
+      expect(await storage.loadSession(session.sessionId)).toEqual(session);
+    });
+  });
+
+  test("a session from another build starts over instead of failing", async () => {
+    await withTempStorage(async (storage, dir) => {
+      const session = testSession();
+      await storage.saveSession(session);
+
+      const [path] = await Array.fromAsync(
+        new Bun.Glob("**/session.json").scan({ cwd: dir, absolute: true }),
+      );
+      await writeFile(
+        path!,
+        JSON.stringify({ ...session, schemaVersion: 1, intents: [] }),
+      );
+
+      expect(await storage.loadSession(session.sessionId)).toBeNull();
     });
   });
 });

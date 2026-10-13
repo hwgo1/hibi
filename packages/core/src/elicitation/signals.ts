@@ -56,7 +56,7 @@ export function deriveSignals(
     }
 
     const forced =
-      hints.filter((event) => event.helpDepth === 3).length / hints.length;
+      hints.filter((event) => event.forced === true).length / hints.length;
     if (forced >= 0.5) {
       signals.push({
         key: "disclosure",

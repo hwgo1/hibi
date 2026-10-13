@@ -1,5 +1,6 @@
 import type { ToolContext } from "./context";
 import { askLearner, recordAnswer } from "./elicitation-tools";
+import { abandonItem } from "./items";
 import { nextSteps, setGoal, skipConcept } from "./goal-tools";
 import { answerQuiz, askQuiz, disputeMastery } from "./quiz-tools";
 import { ToolRegistry } from "./registry";
@@ -29,8 +30,10 @@ export function buildToolRegistry(): ToolRegistry<ToolContext> {
     .register(verify)
     .register(listFiles)
     .register(readFile)
-    .register(recordAttempt);
+    .register(recordAttempt)
+    .register(abandonItem);
 }
 
 export * from "./context";
+export * from "./items";
 export * from "./registry";
