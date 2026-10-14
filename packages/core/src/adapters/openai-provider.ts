@@ -112,6 +112,7 @@ export class OpenAIProvider implements LLMProvider {
             parameters: tool.parameters,
           },
         })),
+        tool_choice: request.toolChoice === "none" ? "none" : undefined,
       });
     } catch (error) {
       yield classifyOpenAIError(error);

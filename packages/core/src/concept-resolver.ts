@@ -122,61 +122,70 @@ function similarity(a: string, b: string): number {
 const MATCH_THRESHOLD = 0.85;
 const AMBIGUOUS_THRESHOLD = 0.6;
 
-/** Single entry point from a natural-language term to concept. The model never writes a concept id directly */
+export type LookupOutcome =
+  | { status: "matched"; concept: Concept; exact: boolean }
+  | { status: "ambiguous"; candidates: Concept[] }
+  | { status: "unknown" };
+
+/** Matches a term against existing concepts without changing the registry */
+export function lookupConcept(
+  registry: ConceptRegistry,
+  term: string,
+): LookupOutcome {
+  const key = normalizeTerm(term);
+  if (key.length === 0) return { status: "unknown" };
+
+  const exact = exactMatch(registry, key);
+  if (exact !== undefined) {
+    return { status: "matched", concept: exact, exact: true };
+  }
+
+  const scored = rank(registry, key);
+  const best = scored[0];
+  if (best !== undefined && best.score >= MATCH_THRESHOLD) {
+    return { status: "matched", concept: best.concept, exact: false };
+  }
+
+  const candidates = scored
+    .filter((entry) => entry.score >= AMBIGUOUS_THRESHOLD)
+    .slice(0, 5)
+    .map((entry) => entry.concept);
+
+  return candidates.length > 0
+    ? { status: "ambiguous", candidates }
+    : { status: "unknown" };
+}
+
+/**
+ * Single entry point from a natural-language term to concept. The model never
+ * writes a concept id directly. A close spelling variant is learned as an alias
+ */
 export function resolveConcept(
   registry: ConceptRegistry,
   term: string,
   options: ResolveOptions,
 ): ResolveOutcome {
   const key = normalizeTerm(term);
-  if (key.length === 0) {
-    return { status: "ambiguous", candidates: [] };
+  if (key.length === 0) return { status: "ambiguous", candidates: [] };
+
+  const lookup = lookupConcept(registry, term);
+  if (lookup.status === "ambiguous") return lookup;
+  if (lookup.status === "unknown") {
+    return createConcept(registry, key, term, options);
+  }
+  if (lookup.exact) {
+    return { status: "matched", concept: lookup.concept, registry };
   }
 
-  const exact = exactMatch(registry, key);
-  if (exact !== undefined) {
-    return { status: "matched", concept: exact, registry };
-  }
-
-  const scored = rank(registry, key);
-  const best = scored[0];
-
-  if (best && best.score >= MATCH_THRESHOLD) {
-    const updated: Concept = {
-      ...best.concept,
-      aliases: [...best.concept.aliases, key],
-    };
-    return {
-      status: "matched",
-      concept: updated,
-      registry: replaceConcept(registry, updated, options.now),
-    };
-  }
-
-  const nearby = scored
-    .filter((entry) => entry.score >= AMBIGUOUS_THRESHOLD)
-    .map((entry) => entry.concept);
-
-  if (nearby.length > 0) {
-    return { status: "ambiguous", candidates: nearby.slice(0, 5) };
-  }
-
-  return createConcept(registry, key, term, options);
-}
-
-/** Matches an existing concept without creating one or learning an alias */
-export function findConcept(
-  registry: ConceptRegistry,
-  term: string,
-): Concept | undefined {
-  const key = normalizeTerm(term);
-  if (key.length === 0) return undefined;
-  const exact = exactMatch(registry, key);
-  if (exact !== undefined) return exact;
-  const best = rank(registry, key)[0];
-  return best !== undefined && best.score >= MATCH_THRESHOLD
-    ? best.concept
-    : undefined;
+  const updated: Concept = {
+    ...lookup.concept,
+    aliases: [...lookup.concept.aliases, key],
+  };
+  return {
+    status: "matched",
+    concept: updated,
+    registry: replaceConcept(registry, updated, options.now),
+  };
 }
 
 function exactMatch(
@@ -241,8 +250,9 @@ function resolveParent(
 ): ConceptId | null {
   if (parentTerm === undefined) return null;
 
-  const parent = findConcept(registry, parentTerm);
-  if (parent === undefined) return null;
+  const lookup = lookupConcept(registry, parentTerm);
+  if (lookup.status !== "matched") return null;
+  const parent = lookup.concept;
 
   if (depth(indexConcepts(registry), parent.id) >= MAX_CONCEPT_DEPTH - 1) {
     return parent.parentId;

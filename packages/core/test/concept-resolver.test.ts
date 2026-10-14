@@ -8,8 +8,8 @@ import {
 import {
   ancestors,
   depth,
-  findConcept,
   indexConcepts,
+  lookupConcept,
   normalizeTerm,
   resolveConcept,
 } from "../src/concept-resolver";
@@ -109,17 +109,24 @@ describe("resolveConcept", () => {
   });
 });
 
-describe("findConcept", () => {
+describe("lookupConcept", () => {
   test("matches regardless of case", () => {
-    expect(findConcept(seedRegistry(NOW), "Concurrency")?.id).toBe(
+    const lookup = lookupConcept(seedRegistry(NOW), "Concurrency");
+    expect(lookup.status === "matched" && lookup.concept.id).toBe(
       "concurrency" as ConceptId,
     );
   });
 
-  test("never creates a concept", () => {
-    const registry = seedRegistry(NOW);
-    expect(findConcept(registry, "goroutines")).toBeUndefined();
-    expect(registry.concepts).toHaveLength(seedRegistry(NOW).concepts.length);
+  test("never creates a concept or learns an alias", () => {
+    const registry = withConcepts([concept("linked-list")]);
+    expect(lookupConcept(registry, "goroutines").status).toBe("unknown");
+    expect(lookupConcept(registry, "linked lists").status).toBe("matched");
+    expect(registry.concepts.at(-1)?.aliases).toEqual([]);
+  });
+
+  test("lists candidates for an ambiguous term", () => {
+    const registry = withConcepts([concept("hash-map"), concept("hash-set")]);
+    expect(lookupConcept(registry, "hash mapping").status).toBe("ambiguous");
   });
 });
 

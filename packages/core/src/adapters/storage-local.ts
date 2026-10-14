@@ -200,9 +200,11 @@ export class StorageLocal implements Storage {
     );
   }
 
-  async appendEvidence(event: EvidenceEvent): Promise<void> {
+  async appendEvidence(events: readonly EvidenceEvent[]): Promise<void> {
+    if (events.length === 0) return;
     await mkdir(this.home, { recursive: true });
-    await appendFile(this.evidencePath(), `${JSON.stringify(event)}\n`, "utf8");
+    const lines = events.map((event) => `${JSON.stringify(event)}\n`).join("");
+    await appendFile(this.evidencePath(), lines, "utf8");
   }
 
   async queryEvidence(query: EvidenceQuery): Promise<EvidenceEvent[]> {
@@ -222,11 +224,13 @@ export class StorageLocal implements Storage {
     return query.limit === undefined ? matched : matched.slice(-query.limit);
   }
 
-  async clearEvidence(): Promise<void> {
+  async clearEvidence(): Promise<number> {
+    const count = await this.countEvidence();
     await rm(this.evidencePath(), { force: true });
+    return count;
   }
 
-  async countEvidence(): Promise<number> {
+  private async countEvidence(): Promise<number> {
     try {
       const text = await readFile(this.evidencePath(), "utf8");
       return text.split("\n").filter((line) => line.trim().length > 0).length;

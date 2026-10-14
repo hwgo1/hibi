@@ -39,23 +39,19 @@ describe("streaming", () => {
 
     const dir = await mkdtemp(join(tmpdir(), "hibi-stream-"));
     try {
-      const tutor = new TutorSession({
-        provider: new FakeProvider(script),
-        storage: new StorageLocal(dir),
-        workspace,
-        clock: { now: () => NOW },
-      });
-
-      const state = newSessionState(
-        "s1" as SessionId,
-        "local" as UserId,
-        "/tmp/repo",
-        NOW,
+      const tutor = new TutorSession(
+        {
+          provider: new FakeProvider(script),
+          storage: new StorageLocal(dir),
+          workspace,
+          clock: { now: () => NOW },
+        },
+        newSessionState("s1" as SessionId, "local" as UserId, "/tmp/repo", NOW),
       );
       const texts: string[] = [];
       let usage = { inputTokens: 0, outputTokens: 0 };
 
-      for await (const event of tutor.turn(state, [], "oi")) {
+      for await (const event of tutor.turn("oi")) {
         if (event.type === "text") texts.push(event.text);
         if (event.type === "usage") usage = event.usage;
       }

@@ -7,6 +7,9 @@ import {
   SessionIdSchema,
   UnitIntervalSchema,
   UserIdSchema,
+  type EvidenceId,
+  type SessionId,
+  type UserId,
 } from "../ids";
 import { HintStepSchema } from "./session";
 
@@ -23,7 +26,7 @@ export const EVIDENCE_KINDS = [
   "external_code_detected",
   "item_abandoned",
   "mastery_disputed",
-  "turn_retracted",
+  "evidence_retracted",
 ] as const;
 
 export const EvidenceKindSchema = z.enum(EVIDENCE_KINDS);
@@ -82,9 +85,63 @@ export const EvidenceEventSchema = z.object({
   /** The learner's prediction of the outcome before running it */
   predicted: z.enum(["pass", "fail"]).optional(),
   note: z.string().optional(),
+  /** On `evidence_retracted`: the events it annuls */
+  retracts: z.array(EvidenceIdSchema).optional(),
 });
 
 export type EvidenceEvent = z.infer<typeof EvidenceEventSchema>;
+
+/** What a caller decides about an event; identity and time are filled in by `buildEvidence` */
+export type NewEvidence = Omit<
+  EvidenceEvent,
+  | "schemaVersion"
+  | "id"
+  | "at"
+  | "userId"
+  | "sessionId"
+  | "turnIndex"
+  | "confidence"
+  | "outcome"
+> &
+  Partial<Pick<EvidenceEvent, "confidence" | "outcome">>;
+
+export interface EvidenceOrigin {
+  userId: UserId;
+  sessionId: SessionId;
+  turnIndex: number;
+  at: string;
+}
+
+export function buildEvidence(
+  evidence: NewEvidence,
+  origin: EvidenceOrigin,
+): EvidenceEvent {
+  return {
+    schemaVersion: EVIDENCE_EVENT_SCHEMA_VERSION,
+    id: `ev_${crypto.randomUUID()}` as EvidenceId,
+    ...origin,
+    ...evidence,
+    confidence: evidence.confidence ?? 1,
+    outcome: evidence.outcome ?? "n/a",
+  };
+}
+
+/** One event annulling others. The log stays append-only, so history can always be recomputed */
+export function buildRetraction(
+  targets: ReadonlyArray<Pick<EvidenceEvent, "id" | "conceptId">>,
+  origin: EvidenceOrigin,
+): EvidenceEvent {
+  return buildEvidence(
+    {
+      kind: "evidence_retracted",
+      conceptId: targets[0]!.conceptId,
+      provenance: "system",
+      confidence: 0,
+      retracts: targets.map((target) => target.id),
+    },
+    origin,
+  );
+}
 
 /**
  * Parses one log line. Returns null for a line the schema rejects, so one bad
@@ -99,33 +156,16 @@ export function evidenceWeight(event: EvidenceEvent): number {
   return PROVENANCE_WEIGHTS[event.provenance] * event.confidence;
 }
 
-const RETRACTION_PREFIX = "retract:";
-
-/** Note marking a `turn_retracted` event as annulling the given turn. */
-export function retractionNote(turnIndex: number): string {
-  return `${RETRACTION_PREFIX}${turnIndex}`;
-}
-
-/**
- * Drops events belonging to retracted turns.
- *
- * A retraction is an appended event, so the log stays append-only and mastery
- * can still be recomputed over its full history
- */
+/** Drops retracted events and the retraction markers themselves */
 export function applyRetractions(events: EvidenceEvent[]): EvidenceEvent[] {
   const retracted = new Set<string>();
-
   for (const event of events) {
-    if (event.kind !== "turn_retracted") continue;
-    if (event.note?.startsWith(RETRACTION_PREFIX) !== true) continue;
-    retracted.add(
-      `${event.sessionId}:${event.note.slice(RETRACTION_PREFIX.length)}`,
-    );
+    if (event.kind === "evidence_retracted") {
+      for (const id of event.retracts ?? []) retracted.add(id);
+    }
   }
 
   return events.filter(
-    (event) =>
-      event.kind !== "turn_retracted" &&
-      !retracted.has(`${event.sessionId}:${event.turnIndex}`),
+    (event) => event.kind !== "evidence_retracted" && !retracted.has(event.id),
   );
 }

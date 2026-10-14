@@ -47,18 +47,16 @@ describe("StorageLocal", () => {
 
   test("appends evidence and queries it back in chronological order", async () => {
     await withTempStorage(async (storage) => {
-      await storage.appendEvidence(
+      await storage.appendEvidence([
         event({
           id: "b" as EvidenceEvent["id"],
           at: "2026-01-02T00:00:00.000Z",
         }),
-      );
-      await storage.appendEvidence(
         event({
           id: "a" as EvidenceEvent["id"],
           at: "2026-01-01T00:00:00.000Z",
         }),
-      );
+      ]);
 
       const found = await storage.queryEvidence({ userId: USER });
       expect(found.map((e) => e.id)).toEqual([
@@ -70,13 +68,13 @@ describe("StorageLocal", () => {
 
   test("filters evidence by concept", async () => {
     await withTempStorage(async (storage) => {
-      await storage.appendEvidence(event());
-      await storage.appendEvidence(
+      await storage.appendEvidence([
+        event(),
         event({
           id: "ev2" as EvidenceEvent["id"],
           conceptId: "goroutines" as EvidenceEvent["conceptId"],
         }),
-      );
+      ]);
 
       const found = await storage.queryEvidence({
         userId: USER,

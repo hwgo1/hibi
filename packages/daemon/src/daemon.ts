@@ -5,22 +5,16 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import {
-  computeMastery,
-  seenConcepts,
-  EVIDENCE_EVENT_SCHEMA_VERSION,
   indexRepo,
   newSessionState,
-  retractionNote,
   StorageLocal,
   systemClock,
   TeachingPreferencesSchema,
   TutorSession,
   WorkspaceFs,
   type Clock,
-  type ConceptId,
-  type EvidenceId,
+  type CommandOutcome,
   type LLMProvider,
-  type ProviderMessage,
   type SessionId,
   type SessionState,
   type UserId,
@@ -37,12 +31,6 @@ import {
 import { TurnQueue } from "./turn-queue";
 
 const LOCAL_USER = "local" as UserId;
-
-/** Transcript is kept in memory only: durable state lives in the session file. */
-const TRANSCRIPT_CAP = 24;
-
-/** Concept attached to retractions, which are bookkeeping rather than learning */
-const SYSTEM_CONCEPT = "programming-fundamentals" as ConceptId;
 
 export interface DaemonOptions {
   repoRoot: string;
@@ -61,27 +49,19 @@ export function socketPath(repoRoot: string, home: string): string {
 
 export class Daemon {
   private readonly storage: StorageLocal;
-  private readonly tutor: TutorSession;
   private readonly queue = new TurnQueue();
   private readonly clients = new Set<Socket>();
   private readonly home: string;
   private readonly clock: Clock;
 
   private server: Server | null = null;
-  private session: SessionState | null = null;
-  private transcript: ProviderMessage[] = [];
+  private tutor: TutorSession | null = null;
   private lockPath: string | null = null;
 
   constructor(private readonly options: DaemonOptions) {
     this.home = options.home ?? join(homedir(), ".hibi");
     this.clock = options.clock ?? systemClock;
     this.storage = new StorageLocal(this.home);
-    this.tutor = new TutorSession({
-      provider: options.provider,
-      storage: this.storage,
-      workspace: new WorkspaceFs(options.repoRoot),
-      clock: this.clock,
-    });
   }
 
   async start(): Promise<void> {
@@ -95,7 +75,15 @@ export class Daemon {
       );
     }
 
-    this.session = await this.loadSession();
+    this.tutor = new TutorSession(
+      {
+        provider: this.options.provider,
+        storage: this.storage,
+        workspace: new WorkspaceFs(this.options.repoRoot),
+        clock: this.clock,
+      },
+      await this.loadSession(),
+    );
     await this.ensureIndexed();
 
     const path = socketPath(this.options.repoRoot, this.home);
@@ -167,7 +155,7 @@ export class Daemon {
   private async handle(request: ClientRequest, socket: Socket): Promise<void> {
     switch (request.type) {
       case "state":
-        this.reply(socket, { type: "state", payload: this.session });
+        this.reply(socket, { type: "state", payload: this.tutor?.session });
         return;
 
       case "profile": {
@@ -190,15 +178,21 @@ export class Daemon {
         return;
 
       case "undo":
-        await this.undoLastTurn(socket);
+        await this.command(socket, (tutor) => tutor.undo());
         return;
 
       case "forget":
-        await this.forget(request.scope, request.value, socket);
+        await this.command(socket, (tutor) => {
+          if (request.scope === "all") return tutor.forgetAll();
+          if (request.value === undefined) {
+            return Promise.resolve({ ok: false, message: "which concept?" });
+          }
+          return tutor.forget(request.value);
+        });
         return;
 
       case "clear":
-        this.transcript = [];
+        this.tutor?.clearTranscript();
         this.reply(socket, { type: "ok", message: "conversation cleared" });
         return;
 
@@ -261,112 +255,18 @@ export class Daemon {
     this.reply(socket, { type: "ok", message: `${key} = ${value}` });
   }
 
-  private async undoLastTurn(socket: Socket): Promise<void> {
-    if (this.session === null || this.session.turnCount === 0) {
-      this.reply(socket, { type: "error", message: "nothing to undo" });
-      return;
-    }
-
-    await this.appendRetraction(
-      this.session.sessionId,
-      this.session.turnCount,
-      SYSTEM_CONCEPT,
-    );
-
-    this.transcript = this.transcript.slice(0, -2);
-    await this.recomputeMastery();
-
-    this.reply(socket, {
-      type: "ok",
-      message: `turn ${this.session.turnCount} retracted`,
-    });
-  }
-
-  /** Retracts evidence for one concept, or removes the log entirely */
-  private async forget(
-    scope: "concept" | "all",
-    value: string | undefined,
+  /** Runs a state-changing command in turn order, so it never interleaves with a turn */
+  private async command(
     socket: Socket,
+    run: (tutor: TutorSession) => Promise<CommandOutcome>,
   ): Promise<void> {
-    if (scope === "all") {
-      const count = await this.storage.countEvidence();
-      await this.storage.clearEvidence();
-      await this.recomputeMastery();
-
-      this.reply(socket, {
-        type: "ok",
-        message: `removed ${count} events permanently`,
-      });
-      return;
-    }
-
-    if (value === undefined) {
-      this.reply(socket, { type: "error", message: "which concept?" });
-      return;
-    }
-
-    const conceptId = value as ConceptId;
-    const events = await this.storage.queryEvidence({
-      userId: LOCAL_USER,
-      conceptId,
-    });
-    const turns = new Map<
-      string,
-      { sessionId: SessionId; turnIndex: number }
-    >();
-
-    for (const event of events) {
-      turns.set(`${event.sessionId}:${event.turnIndex}`, {
-        sessionId: event.sessionId,
-        turnIndex: event.turnIndex,
-      });
-    }
-
-    for (const turn of turns.values()) {
-      await this.appendRetraction(turn.sessionId, turn.turnIndex, conceptId);
-    }
-
-    await this.recomputeMastery();
+    const tutor = this.tutor;
+    if (tutor === null) return;
+    const result = await this.queue.run(() => run(tutor));
     this.reply(socket, {
-      type: "ok",
-      message: `retracted ${turns.size} turns on ${conceptId}`,
+      type: result.ok ? "ok" : "error",
+      message: result.message,
     });
-  }
-
-  private async appendRetraction(
-    sessionId: SessionId,
-    turnIndex: number,
-    conceptId: ConceptId,
-  ): Promise<void> {
-    await this.storage.appendEvidence({
-      schemaVersion: EVIDENCE_EVENT_SCHEMA_VERSION,
-      id: `ev_${Math.random().toString(36).slice(2, 12)}` as EvidenceId,
-      at: this.clock.now().toISOString(),
-      userId: LOCAL_USER,
-      sessionId,
-      turnIndex,
-      kind: "turn_retracted",
-      conceptId,
-      provenance: "system",
-      confidence: 0,
-      outcome: "n/a",
-      note: retractionNote(turnIndex),
-    });
-  }
-
-  /** Rebuilds mastery from the visible log after evidence changes */
-  private async recomputeMastery(): Promise<void> {
-    const learner = await this.storage.loadLearnerModel(LOCAL_USER);
-    const registry = await this.storage.loadConceptRegistry(LOCAL_USER);
-    if (learner === null || registry === null) return;
-
-    const events = await this.storage.queryEvidence({ userId: LOCAL_USER });
-    const now = this.clock.now();
-
-    learner.mastery = computeMastery(registry, events, now);
-    learner.seen = seenConcepts(events);
-    learner.updatedAt = now.toISOString();
-    await this.storage.saveLearnerModel(learner);
   }
 
   /** Rebuilds the repository model on demand */
@@ -392,17 +292,12 @@ export class Daemon {
    * an editor panel watching the same daemon
    */
   private async runTurn(text: string): Promise<void> {
-    if (this.session === null) return;
-    let assistantText = "";
+    const tutor = this.tutor;
+    if (tutor === null) return;
 
     try {
-      for await (const event of this.tutor.turn(
-        this.session,
-        this.transcript,
-        text,
-      )) {
+      for await (const event of tutor.turn(text)) {
         if (event.type === "text") {
-          assistantText += event.text;
           this.broadcast({ type: "text", text: event.text });
         } else if (event.type === "tool") {
           this.broadcast({ type: "tool", name: event.name, args: event.args });
@@ -425,12 +320,9 @@ export class Daemon {
       });
     }
 
-    this.transcript.push({ role: "user", content: text });
-    this.transcript.push({ role: "assistant", content: assistantText });
-    this.transcript = this.transcript.slice(-TRANSCRIPT_CAP);
-
-    const active = this.session.items.find(
-      (item) => item.id === this.session?.activeItemId,
+    const session = tutor.session;
+    const active = session.items.find(
+      (item) => item.id === session.activeItemId,
     );
     if (active?.ladder !== undefined) {
       this.broadcast({ type: "step", step: active.ladder.step });

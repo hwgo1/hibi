@@ -32,6 +32,8 @@ export interface CompletionRequest {
   system: string;
   messages: ProviderMessage[];
   tools: ToolDefinition[];
+  /** "none" keeps the tools visible but forbids calling them, forcing a text answer */
+  toolChoice?: "auto" | "none";
   maxTokens: number;
 }
 

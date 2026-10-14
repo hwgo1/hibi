@@ -25,9 +25,12 @@ export interface Storage {
   loadConceptRegistry(userId: UserId): Promise<ConceptRegistry | null>;
   saveConceptRegistry(userId: UserId, registry: ConceptRegistry): Promise<void>;
 
-  /** Append-only. Never updates or deletes an existing event */
-  appendEvidence(event: EvidenceEvent): Promise<void>;
+  /** Append-only, in one write. Never updates or deletes an existing event */
+  appendEvidence(events: readonly EvidenceEvent[]): Promise<void>;
+  /** Visible events: retracted ones and the retraction markers are left out */
   queryEvidence(query: EvidenceQuery): Promise<EvidenceEvent[]>;
+  /** Deletes the whole log and returns how many events it held */
+  clearEvidence(): Promise<number>;
 }
 
 /** Injected so time-dependent logic stays deterministic under test */

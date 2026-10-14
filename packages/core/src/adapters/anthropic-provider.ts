@@ -101,6 +101,8 @@ export class AnthropicProvider implements LLMProvider {
           description: tool.description,
           input_schema: tool.parameters as Anthropic.Tool.InputSchema,
         })),
+        tool_choice:
+          request.toolChoice === "none" ? { type: "none" } : undefined,
       });
 
       for await (const event of stream) {
