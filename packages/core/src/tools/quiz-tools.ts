@@ -7,6 +7,7 @@ import {
   QuizQuestionSchema,
   type QuizQuestion,
 } from "../schemas/quiz";
+import { pendingQuiz } from "../schemas/session";
 import { ConceptTermArg, ParentTermArg, resolveTerm } from "./concept-term";
 import type { ToolContext } from "./context";
 import { defineTool, type Tool } from "./registry";
@@ -29,6 +30,17 @@ export const askQuiz: Tool<ToolContext> = defineTool({
   }),
 
   async execute(args, context: ToolContext) {
+    const waiting = context.session.pending;
+    if (waiting !== null) {
+      return {
+        content:
+          waiting.type === "quiz"
+            ? "A quiz is already open: call answer_quiz with the user's reply."
+            : "A question is waiting: call record_answer first, with answered false if they moved on.",
+        isError: true,
+      };
+    }
+
     const invalid = args.questions.find(
       (question) =>
         !question.options.some(
@@ -52,7 +64,8 @@ export const askQuiz: Tool<ToolContext> = defineTool({
       conceptId: concept.id,
     }));
 
-    context.session.openQuiz = {
+    context.session.pending = {
+      type: "quiz",
       schemaVersion: OPEN_QUIZ_SCHEMA_VERSION,
       questions,
       cursor: 0,
@@ -87,7 +100,7 @@ export const answerQuiz: Tool<ToolContext> = defineTool({
   }),
 
   async execute(args, context: ToolContext) {
-    const quiz = context.session.openQuiz;
+    const quiz = pendingQuiz(context.session);
 
     if (quiz === null) {
       return { content: "no quiz is open", isError: true };
@@ -95,7 +108,7 @@ export const answerQuiz: Tool<ToolContext> = defineTool({
 
     const question = quiz.questions[quiz.cursor];
     if (question === undefined) {
-      context.session.openQuiz = null;
+      context.session.pending = null;
       return { content: "the quiz is already finished", isError: true };
     }
 
@@ -122,7 +135,7 @@ export const answerQuiz: Tool<ToolContext> = defineTool({
     const next = quiz.questions[quiz.cursor];
 
     if (next === undefined) {
-      context.session.openQuiz = null;
+      context.session.pending = null;
       if (quiz.disputeWeight !== undefined) context.session.dispute = null;
       return {
         content: `${verdict(response, question)}\n\nThe quiz is finished. Summarize how it went.`,

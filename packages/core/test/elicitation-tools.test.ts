@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
+import { pendingQuestion } from "../src/schemas/session";
 import { buildToolRegistry, type ToolContext } from "../src/tools";
 import { testContext as baseContext, testItem } from "./fixtures";
 
@@ -40,7 +41,7 @@ async function askOrFail(
 ): Promise<void> {
   const result = await ask(ctx, seam);
 
-  if (ctx.session.openElicitation === null) {
+  if (pendingQuestion(ctx.session) === null) {
     throw new Error(`ask_learner did not open a question: ${result.content}`);
   }
 }
@@ -50,7 +51,7 @@ describe("ask_learner", () => {
     const ctx = testContext();
     const result = await ask(ctx);
 
-    expect(ctx.session.openElicitation?.kind).toBe("prediction");
+    expect(pendingQuestion(ctx.session)?.kind).toBe("prediction");
     expect(result.content).toContain("stop");
   });
 
@@ -84,7 +85,7 @@ describe("ask_learner", () => {
     const result = await ask(ctx);
 
     expect(result.content).toContain("Not now");
-    expect(ctx.session.openElicitation).toBeNull();
+    expect(pendingQuestion(ctx.session)).toBeNull();
   });
 
   test("does not ask for a prediction without an open exercise", async () => {
@@ -92,14 +93,14 @@ describe("ask_learner", () => {
     const result = await ask(ctx);
 
     expect(result.content).toContain("Not now");
-    expect(ctx.session.openElicitation).toBeNull();
+    expect(pendingQuestion(ctx.session)).toBeNull();
   });
 
   test("ties the question to the active exercise", async () => {
     const ctx = testContext();
     await askOrFail(ctx);
 
-    expect(ctx.session.openElicitation?.itemId).toBe(ctx.session.items[0]!.id);
+    expect(pendingQuestion(ctx.session)?.itemId).toBe(ctx.session.items[0]!.id);
   });
 
   test("rejects a concept term that is a question", async () => {
@@ -116,7 +117,7 @@ describe("ask_learner", () => {
     );
 
     expect(result.isError).toBe(true);
-    expect(ctx.session.openElicitation).toBeNull();
+    expect(pendingQuestion(ctx.session)).toBeNull();
   });
 });
 
@@ -131,7 +132,7 @@ describe("record_answer", () => {
       ctx,
     );
 
-    expect(ctx.session.openElicitation).toBeNull();
+    expect(pendingQuestion(ctx.session)).toBeNull();
     expect(ctx.session.items[0]?.prediction?.predicted).toBe("pass");
     expect(ctx.session.items[0]?.prediction?.selfConfidence).toBe(0.8);
     expect(ctx.pendingEvidence).toHaveLength(0);
@@ -148,7 +149,7 @@ describe("record_answer", () => {
     );
 
     expect(ctx.session.consecutiveIgnored).toBe(1);
-    expect(ctx.session.openElicitation).toBeNull();
+    expect(pendingQuestion(ctx.session)).toBeNull();
     expect(result.isError).toBeUndefined();
   });
 

@@ -10,8 +10,8 @@ import {
   UserIdSchema,
 } from "../ids";
 import { CheckSchema } from "./check";
-import { OpenElicitationSchema } from "./elicitation";
-import { OpenQuizSchema } from "./quiz";
+import { OpenElicitationSchema, type OpenElicitation } from "./elicitation";
+import { OpenQuizSchema, type OpenQuiz } from "./quiz";
 
 /** Locates a snippet without relying on line numbers, which drafts as soon as the user edits above the anchor.
  * `contentHash` detects a stale anchor; `snippet` allows re-locating it
@@ -106,6 +106,22 @@ export const OpenDisputeSchema = z.object({
 
 export type OpenDispute = z.infer<typeof OpenDisputeSchema>;
 
+/** What the tutor is waiting on. One at a time, so a quiz and a question never compete for the reply */
+export const PendingSchema = z.discriminatedUnion("type", [
+  OpenQuizSchema,
+  OpenElicitationSchema,
+]);
+
+export type Pending = z.infer<typeof PendingSchema>;
+
+export function pendingQuiz(session: SessionState): OpenQuiz | null {
+  return session.pending?.type === "quiz" ? session.pending : null;
+}
+
+export function pendingQuestion(session: SessionState): OpenElicitation | null {
+  return session.pending?.type === "question" ? session.pending : null;
+}
+
 export const SESSION_STATE_SCHEMA_VERSION = 2;
 
 export const SessionStateSchema = z.object({
@@ -119,9 +135,8 @@ export const SessionStateSchema = z.object({
   activeItemId: ItemIdSchema.nullable().default(null),
   findings: z.array(FindingSchema).default([]),
   contextFiles: z.array(z.string().min(1)).default([]),
-  openQuiz: OpenQuizSchema.nullable().default(null),
+  pending: PendingSchema.nullable().default(null),
   dispute: OpenDisputeSchema.nullable().default(null),
-  openElicitation: OpenElicitationSchema.nullable().default(null),
   lastElicitedTurn: z.number().int().nonnegative().nullable().default(null),
   elicitationsAsked: z.number().int().nonnegative().default(0),
   consecutiveIgnored: z.number().int().nonnegative().default(0),

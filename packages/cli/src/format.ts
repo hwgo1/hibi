@@ -30,8 +30,8 @@ export function formatState(session: SessionState): string {
     );
   }
 
-  if (session.openQuiz !== null) {
-    const quiz = session.openQuiz;
+  if (session.pending?.type === "quiz") {
+    const quiz = session.pending;
     lines.push(
       ui.dim(
         `quiz open: question ${quiz.cursor + 1} of ${quiz.questions.length}`,

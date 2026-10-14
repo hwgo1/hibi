@@ -26,6 +26,7 @@ import type { ToolContext } from "../tools";
 import { buildToolRegistry } from "../tools";
 import type { ToolRegistry } from "../tools/registry";
 import { loadLearner, refreshLearner } from "./learner-model";
+import { isIdle, renewSession } from "./lifecycle";
 import { buildSystemPrompt } from "./prompt";
 
 const MAX_TOOL_ROUNDS = 5;
@@ -71,7 +72,7 @@ interface TurnRecord {
   goal: Goal | null;
   createdConcepts: ConceptId[];
   changedConcepts: Concept[];
-  transcriptLength: number;
+  transcript: ProviderMessage[];
   evidence: Array<Pick<EvidenceEvent, "id" | "conceptId">>;
 }
 
@@ -98,7 +99,8 @@ export class TutorSession {
 
   /**
    * Runs one turn on copies of the session, learner and registry and commits them
-   * only if the turn completes, so a failure midway leaves no trace
+   * only if the turn completes, so a failure midway leaves no trace. After a long
+   * pause the turn opens a new session, with mastery recomputed for the time away
    */
   async *turn(userMessage: string): AsyncGenerator<TurnEvent> {
     const { storage, workspace, clock, provider } = this.deps;
@@ -113,8 +115,14 @@ export class TutorSession {
     const goalBefore = structuredClone(learner.goal);
     const registryBefore = structuredClone(registry);
 
+    const renewing = isIdle(this.current, now);
+    if (renewing) await refreshLearner(storage, learner, registry, now);
+    const earlier = renewing ? [] : this.transcript;
+
     const context: ToolContext = {
-      session: structuredClone(this.current),
+      session: renewing
+        ? renewSession(structuredClone(this.current))
+        : structuredClone(this.current),
       learner,
       registry,
       workspace,
@@ -133,7 +141,7 @@ export class TutorSession {
     });
 
     const messages: ProviderMessage[] = [
-      ...this.transcript.slice(-TRANSCRIPT_WINDOW),
+      ...earlier.slice(-TRANSCRIPT_WINDOW),
       { role: "user", content: userMessage },
     ];
 
@@ -186,13 +194,13 @@ export class TutorSession {
       session: this.current,
       goal: goalBefore,
       ...registryChanges(registryBefore, context.registry),
-      transcriptLength: this.transcript.length,
+      transcript: this.transcript,
       evidence,
     });
 
     this.current = context.session;
     this.transcript = [
-      ...this.transcript,
+      ...earlier,
       { role: "user" as const, content: userMessage },
       { role: "assistant" as const, content: reply },
     ].slice(-TRANSCRIPT_CAP);
@@ -231,7 +239,7 @@ export class TutorSession {
     ]);
 
     this.current = record.session;
-    this.transcript = this.transcript.slice(0, record.transcriptLength);
+    this.transcript = record.transcript;
     return {
       ok: true,
       message: `turn ${record.session.turnCount + 1} undone`,
@@ -478,9 +486,8 @@ export function newSessionState(
     activeItemId: null,
     findings: [],
     contextFiles: [],
-    openQuiz: null,
+    pending: null,
     dispute: null,
-    openElicitation: null,
     lastElicitedTurn: null,
     elicitationsAsked: 0,
     consecutiveIgnored: 0,

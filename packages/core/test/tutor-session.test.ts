@@ -16,10 +16,11 @@ import {
   TutorSession,
   type TurnEvent,
 } from "../src/session/tutor-session";
+import { SESSION_IDLE_MS } from "../src/session/lifecycle";
 import { testItem } from "./fixtures";
 
 const NOW = new Date("2026-01-01T12:00:00.000Z");
-const clock = { now: () => NOW };
+const clock = { at: NOW, now: () => clock.at };
 const USER = "local" as UserId;
 const SESSION = "s1" as SessionId;
 
@@ -60,6 +61,7 @@ async function withTutor(
   session: SessionState = newSessionState(SESSION, USER, "/tmp/repo", NOW),
 ): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), "hibi-turn-"));
+  clock.at = NOW;
   try {
     const storage = new StorageLocal(dir);
     const provider = new FakeProvider(script);
@@ -444,6 +446,126 @@ describe("forget", () => {
       });
       expect(await storage.queryEvidence({ userId: USER })).toHaveLength(0);
       expect((await tutor.undo()).ok).toBe(false);
+    });
+  });
+});
+
+describe("session lifecycle", () => {
+  const ask = toolCall("ask_learner", {
+    seam: "before_concept",
+    conceptTerm: "concurrency",
+    question: "o que você já sabe de goroutines?",
+  });
+
+  test("after a long pause the tutor may ask again and the old conversation is gone", async () => {
+    const session = newSessionState(SESSION, USER, "/tmp/repo", NOW);
+    session.turnCount = 8;
+    session.lastElicitedTurn = 8;
+    session.consecutiveIgnored = 2;
+
+    await withTutor(
+      [ask, finish, ask, finish],
+      async ({ tutor, provider }) => {
+        await drain(tutor.turn("oi"));
+        expect(tutor.session.pending).toBeNull();
+
+        clock.at = new Date(NOW.getTime() + SESSION_IDLE_MS);
+        await drain(tutor.turn("voltei"));
+
+        expect(tutor.session.pending?.type).toBe("question");
+        expect(provider.requests[2]!.messages).toEqual([
+          { role: "user", content: "voltei" },
+        ]);
+      },
+      session,
+    );
+  });
+
+  test("a new session recomputes mastery for the time away", async () => {
+    const session = newSessionState(SESSION, USER, "/tmp/repo", NOW);
+    session.turnCount = 1;
+
+    await withTutor(
+      [finish, finish],
+      async ({ tutor, storage }) => {
+        await storage.appendEvidence([
+          buildEvidence(
+            {
+              kind: "test_run",
+              conceptId: "concurrency" as ConceptId,
+              provenance: "execution",
+              outcome: "pass",
+            },
+            {
+              userId: USER,
+              sessionId: SESSION,
+              turnIndex: 0,
+              at: NOW.toISOString(),
+            },
+          ),
+        ]);
+        const confidence = async () =>
+          (await storage.loadLearnerModel(USER))!.mastery[0]!.confidence;
+
+        clock.at = new Date(NOW.getTime() + SESSION_IDLE_MS);
+        await drain(tutor.turn("oi"));
+        const fresh = await confidence();
+
+        clock.at = new Date(NOW.getTime() + 120 * 86_400_000);
+        await drain(tutor.turn("voltei"));
+
+        expect(await confidence()).toBeLessThan(fresh / 2);
+      },
+      session,
+    );
+  });
+
+  test("an open quiz survives a restart and can be answered", async () => {
+    const quiz = toolCall("ask_quiz", {
+      conceptTerm: "concurrency",
+      questions: [
+        {
+          prompt: "Quando um canal com buffer bloqueia no envio?",
+          options: [
+            { id: "a", text: "Nunca" },
+            { id: "b", text: "Com o buffer cheio" },
+            { id: "c", text: "Sempre" },
+          ],
+          correctOptionId: "b",
+          explanation: "Só bloqueia quando o buffer enche.",
+        },
+      ],
+    });
+
+    await withTutor([quiz, finish], async ({ storage }) => {
+      const before = new TutorSession(
+        {
+          provider: new FakeProvider([quiz, finish]),
+          storage,
+          workspace,
+          clock,
+        },
+        newSessionState(SESSION, USER, "/tmp/repo", NOW),
+      );
+      await drain(before.turn("me testa"));
+
+      const provider = new FakeProvider([
+        toolCall("answer_quiz", { optionId: "b" }),
+        finish,
+      ]);
+      const after = new TutorSession(
+        { provider, storage, workspace, clock },
+        (await storage.loadSession(SESSION))!,
+      );
+      await drain(after.turn("b"));
+
+      const system = provider.requests[0]!.system;
+      expect(system).toContain("Quando um canal com buffer bloqueia no envio?");
+      expect(system).toContain("b) Com o buffer cheio");
+      expect(system).not.toContain("Só bloqueia quando o buffer enche.");
+      expect(after.session.pending).toBeNull();
+      const answered = await storage.queryEvidence({ userId: USER });
+      expect(answered.map((event) => event.kind)).toContain("quiz_answered");
     });
   });
 });

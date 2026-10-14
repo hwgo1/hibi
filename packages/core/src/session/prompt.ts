@@ -2,7 +2,7 @@ import type { Concept, ConceptRegistry } from "../concepts";
 import type { Workspace } from "../ports/workspace";
 import type { LearnerModel, MasteryEntry } from "../schemas/learner";
 import type { RepoModel } from "../schemas/repo";
-import type { SessionState, WorkItem } from "../schemas/session";
+import type { Pending, SessionState, WorkItem } from "../schemas/session";
 import { STALE_ITEM_THRESHOLD_MS } from "../schemas/session";
 import { describeCheck } from "../verify/checks";
 import { TUTOR_RULES } from "./rules";
@@ -14,6 +14,7 @@ const LIMITS = {
   recurringErrors: 5,
   items: 6,
   findings: 8,
+  learnerFiles: 15,
   contextFileBytes: 12_000,
 } as const;
 
@@ -60,7 +61,7 @@ function renderLearner(learner: LearnerModel): string {
 
   if (p.name.length > 0) lines.push(`name: ${p.name}`);
   lines.push(
-    `language: ${p.language}`,
+    `reply language: ${p.language}`,
     `theory depth: ${p.theoryDepth}`,
     `exercise size: ${p.exerciseSize}`,
     `unsolicited hints: ${p.unsolicitedHints}`,
@@ -70,7 +71,9 @@ function renderLearner(learner: LearnerModel): string {
   if (learner.goal !== null && learner.goal.status === "active") {
     const goal = learner.goal;
     lines.push(`working toward: ${goal.statement}`);
-    if (goal.language !== undefined) lines.push(`language: ${goal.language}`);
+    if (goal.language !== undefined) {
+      lines.push(`programming language: ${goal.language}`);
+    }
     if (goal.skipped.length > 0) {
       lines.push(`says they already know: ${goal.skipped.join(", ")}`);
     }
@@ -188,13 +191,7 @@ function renderSession(session: SessionState, now: Date): string {
     }
   }
 
-  if (lines.length === 1) lines.push(`nothing open`);
-
-  if (session.openElicitation !== null) {
-    lines.push(
-      `awaiting an answer to: "${session.openElicitation.question}" — call record_answer with their reply`,
-    );
-  }
+  lines.push(...renderPending(session.pending));
 
   if (session.dispute !== null) {
     lines.push(
@@ -202,8 +199,31 @@ function renderSession(session: SessionState, now: Date): string {
     );
   }
 
+  if (lines.length === 1) lines.push(`nothing open`);
   lines.push(`</session>`);
   return lines.join("\n");
+}
+
+/**
+ * The pending quiz question is shown in full, without its answer, so the tutor
+ * can put it again after a restart that lost the transcript
+ */
+function renderPending(pending: Pending | null): string[] {
+  if (pending === null) return [];
+
+  if (pending.type === "question") {
+    return [
+      `awaiting an answer to: "${pending.question}" — call record_answer with their reply`,
+    ];
+  }
+
+  const question = pending.questions[pending.cursor];
+  if (question === undefined) return [];
+  return [
+    `quiz open, question ${pending.cursor + 1} of ${pending.questions.length} — call answer_quiz with their reply:`,
+    `  ${question.prompt}`,
+    ...question.options.map((option) => `  ${option.id}) ${option.text}`),
+  ];
 }
 
 function describeItem(
@@ -250,6 +270,13 @@ function renderRepo(repo: RepoModel | null): string {
   lines.push(
     `  files: ${repo.fileStats.user} authored by the user of ${repo.fileStats.total} total`,
   );
+  const authored = repo.userAuthoredFiles.slice(0, LIMITS.learnerFiles);
+  if (authored.length > 0) {
+    const more = repo.userAuthoredFiles.length - authored.length;
+    lines.push(
+      `  written by the user: ${authored.join(", ")}${more > 0 ? ` (+${more} more)` : ""}`,
+    );
+  }
   if (repo.treeSummary.length > 0) {
     lines.push(repo.treeSummary);
   }

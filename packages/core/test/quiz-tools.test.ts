@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import type { ConceptId } from "../src/concepts";
+import { pendingQuiz } from "../src/schemas/session";
 import { buildToolRegistry, type ToolContext } from "../src/tools";
 import { TEST_NOW, testContext } from "./fixtures";
 
@@ -43,8 +44,8 @@ describe("ask_quiz", () => {
     const ctx = testContext();
     const result = await openQuiz(ctx);
 
-    expect(ctx.session.openQuiz?.questions).toHaveLength(1);
-    expect(ctx.session.openQuiz?.cursor).toBe(0);
+    expect(pendingQuiz(ctx.session)?.questions).toHaveLength(1);
+    expect(pendingQuiz(ctx.session)?.cursor).toBe(0);
     expect(result.content).toContain("buffered channel");
   });
 
@@ -69,7 +70,38 @@ describe("ask_quiz", () => {
     );
 
     expect(result.isError).toBe(true);
-    expect(ctx.session.openQuiz).toBeNull();
+    expect(pendingQuiz(ctx.session)).toBeNull();
+  });
+});
+
+describe("one pending at a time", () => {
+  test("a quiz waits for an open question to be answered", async () => {
+    const ctx = testContext();
+    ctx.session.pending = {
+      type: "question",
+      schemaVersion: 1,
+      kind: "recap",
+      conceptId: "concurrency" as ConceptId,
+      question: "o que ficou?",
+      askedAt: TEST_NOW.toISOString(),
+    };
+
+    const result = await openQuiz(ctx);
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain("record_answer");
+    expect(ctx.session.pending?.type).toBe("question");
+  });
+
+  test("a second quiz does not replace the open one", async () => {
+    const ctx = testContext();
+    await openQuiz(ctx);
+    const first = pendingQuiz(ctx.session);
+
+    const result = await openQuiz(ctx);
+
+    expect(result.content).toContain("answer_quiz");
+    expect(pendingQuiz(ctx.session)).toBe(first);
   });
 });
 
@@ -117,7 +149,7 @@ describe("answer_quiz", () => {
     await openQuiz(ctx);
     await buildToolRegistry().execute("answer_quiz", { optionId: "b" }, ctx);
 
-    expect(ctx.session.openQuiz).toBeNull();
+    expect(pendingQuiz(ctx.session)).toBeNull();
   });
 
   test("errors when no quiz is open", async () => {
@@ -208,7 +240,7 @@ describe("dispute_mastery", () => {
       ctx,
     );
     await openQuiz(ctx);
-    expect(ctx.session.openQuiz?.disputeWeight).toBe(1);
+    expect(pendingQuiz(ctx.session)?.disputeWeight).toBe(1);
 
     await registry.execute("answer_quiz", { optionId: "b" }, ctx);
     expect(ctx.session.dispute).toBeNull();

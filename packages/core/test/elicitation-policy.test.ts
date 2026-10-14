@@ -37,7 +37,8 @@ describe("shouldElicit", () => {
 
   test("does not open a second question over an open one", () => {
     const session = testSession();
-    session.openElicitation = {
+    session.pending = {
+      type: "question",
       schemaVersion: 1,
       kind: "recap",
       conceptId: "concurrency" as never,
@@ -50,9 +51,35 @@ describe("shouldElicit", () => {
 
   test("stops asking after the learner ignores two in a row", () => {
     const session = testSession();
+    session.turnCount = 6;
+    session.lastElicitedTurn = 6;
     session.consecutiveIgnored = ELICITATION_LIMITS.ignoredBeforeBackoff;
 
     expect(shouldElicit(context({ session })).ask).toBe(false);
+  });
+
+  test("an ignored streak stops counting once enough turns pass", () => {
+    const session = testSession();
+    session.lastElicitedTurn = 6;
+    session.turnCount = 6 + ELICITATION_LIMITS.backoffTurns;
+    session.consecutiveIgnored = ELICITATION_LIMITS.ignoredBeforeBackoff;
+
+    expect(shouldElicit(context({ session })).ask).toBe(true);
+  });
+
+  test("does not ask while a quiz is waiting", () => {
+    const session = testSession();
+    session.pending = {
+      type: "quiz",
+      schemaVersion: 1,
+      questions: [],
+      cursor: 0,
+      askedAt: TEST_NOW.toISOString(),
+    };
+
+    const decision = shouldElicit(context({ session }));
+    expect(decision.ask).toBe(false);
+    expect(!decision.ask && decision.reason).toContain("quiz");
   });
 
   test("respects the gap between questions", () => {

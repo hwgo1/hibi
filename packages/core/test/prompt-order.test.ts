@@ -127,3 +127,73 @@ describe("session section", () => {
     expect(await build(state)).toContain("STALE");
   });
 });
+
+describe("learner and repo sections", () => {
+  test("names the reply language and the programming language apart", async () => {
+    const prompt = await buildSystemPrompt({
+      learner: {
+        ...learner(),
+        goal: {
+          schemaVersion: 1,
+          kind: "language",
+          statement: "aprender Go",
+          language: "Go",
+          skipped: [],
+          createdAt: NOW.toISOString(),
+          lastTouchedAt: NOW.toISOString(),
+          status: "active",
+        },
+      },
+      session: session(),
+      registry: seedRegistry(NOW),
+      repo: null,
+      workspace,
+      now: NOW,
+    });
+
+    expect(prompt).toContain("reply language: pt-BR");
+    expect(prompt).toContain("programming language: Go");
+    expect(prompt).not.toMatch(/^language:/m);
+  });
+
+  test("lists the files the user wrote, up to a cap", async () => {
+    const files = Array.from({ length: 18 }, (_, index) => `src/f${index}.go`);
+    const prompt = await buildSystemPrompt({
+      learner: learner(),
+      session: session(),
+      registry: seedRegistry(NOW),
+      repo: {
+        schemaVersion: 1,
+        repoRoot: "/tmp/repo",
+        indexedAt: NOW.toISOString(),
+        hasGit: true,
+        singleAuthor: true,
+        subprojects: [
+          {
+            id: "root",
+            path: ".",
+            languages: ["Go"],
+            entrypoints: [],
+            dependencies: [],
+          },
+        ],
+        fileStats: {
+          total: 30,
+          user: 18,
+          external: 12,
+          generated: 0,
+          unknown: 0,
+        },
+        userAuthoredFiles: files,
+        ignoredPatterns: [],
+        treeSummary: "",
+      },
+      workspace,
+      now: NOW,
+    });
+
+    expect(prompt).toContain("written by the user: src/f0.go");
+    expect(prompt).toContain("src/f14.go (+3 more)");
+    expect(prompt).not.toContain("src/f15.go");
+  });
+});

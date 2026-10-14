@@ -19,7 +19,7 @@ export class FakeProvider implements LLMProvider {
   constructor(private readonly script: CompletionEvent[][]) {}
 
   async *complete(request: CompletionRequest): AsyncIterable<CompletionEvent> {
-    this.requests.push(request);
+    this.requests.push(structuredClone(request));
     const events = this.script[this.index] ?? [
       { type: "done", stopReason: "end_turn" as const },
     ];

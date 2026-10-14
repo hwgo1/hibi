@@ -21,6 +21,8 @@ export const ELICITATION_LIMITS = {
   maxPerSession: 6,
   /** Consecutive unanswered questions before the tutor stops asking */
   ignoredBeforeBackoff: 2,
+  /** Turns after the last question before an ignored streak stops counting */
+  backoffTurns: 10,
 } as const;
 
 export interface ElicitationContext {
@@ -42,26 +44,28 @@ export function shouldElicit(context: ElicitationContext): ElicitationDecision {
     return { ask: false, reason: "learner declined unsolicited prompts" };
   }
 
-  if (session.openElicitation !== null) {
-    return { ask: false, reason: "one is already open" };
-  }
-
-  if (session.openQuiz !== null) {
-    return { ask: false, reason: "a quiz is open" };
-  }
-
-  if (session.consecutiveIgnored >= ELICITATION_LIMITS.ignoredBeforeBackoff) {
-    return { ask: false, reason: "the learner has been ignoring these" };
-  }
-
-  if (session.elicitationsAsked >= ELICITATION_LIMITS.maxPerSession) {
-    return { ask: false, reason: "session limit reached" };
+  if (session.pending !== null) {
+    return {
+      ask: false,
+      reason: `a ${session.pending.type} is waiting for an answer`,
+    };
   }
 
   const since =
     session.lastElicitedTurn === null
       ? Number.POSITIVE_INFINITY
       : session.turnCount - session.lastElicitedTurn;
+
+  if (
+    session.consecutiveIgnored >= ELICITATION_LIMITS.ignoredBeforeBackoff &&
+    since < ELICITATION_LIMITS.backoffTurns
+  ) {
+    return { ask: false, reason: "the learner has been ignoring these" };
+  }
+
+  if (session.elicitationsAsked >= ELICITATION_LIMITS.maxPerSession) {
+    return { ask: false, reason: "session limit reached" };
+  }
 
   if (since < ELICITATION_LIMITS.minTurnsBetween) {
     return { ask: false, reason: "asked too recently" };

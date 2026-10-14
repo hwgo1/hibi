@@ -3,6 +3,7 @@ import { z } from "zod";
 import { shouldElicit } from "../elicitation/policy";
 import type { ItemId } from "../ids";
 import { ELICITATION_SCHEMA_VERSION } from "../schemas/elicitation";
+import { pendingQuestion } from "../schemas/session";
 import { ConceptTermArg, ParentTermArg, resolveTerm } from "./concept-term";
 import type { ToolContext } from "./context";
 import { findOpenItem } from "./items";
@@ -54,7 +55,8 @@ export const askLearner: Tool<ToolContext> = defineTool({
     const resolved = resolveTerm(context, args.conceptTerm, args.parentTerm);
     if (!resolved.ok) return resolved.outcome;
 
-    context.session.openElicitation = {
+    context.session.pending = {
+      type: "question",
       schemaVersion: ELICITATION_SCHEMA_VERSION,
       kind: decision.kind,
       conceptId: resolved.concept.id,
@@ -100,13 +102,13 @@ export const recordAnswer: Tool<ToolContext> = defineTool({
   }),
 
   async execute(args, context: ToolContext) {
-    const open = context.session.openElicitation;
+    const open = pendingQuestion(context.session);
 
-    if (open === null || open === undefined) {
+    if (open === null) {
       return { content: "no question is open", isError: true };
     }
 
-    context.session.openElicitation = null;
+    context.session.pending = null;
 
     if (!args.answered) {
       context.session.consecutiveIgnored += 1;

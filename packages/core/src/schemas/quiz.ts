@@ -43,6 +43,7 @@ export type QuizResponse = z.infer<typeof QuizResponseSchema>;
 export const OPEN_QUIZ_SCHEMA_VERSION = 1;
 
 export const OpenQuizSchema = z.object({
+  type: z.literal("quiz"),
   schemaVersion: z.literal(OPEN_QUIZ_SCHEMA_VERSION),
   questions: z.array(QuizQuestionSchema).min(1),
   cursor: z.number().int().nonnegative(),
