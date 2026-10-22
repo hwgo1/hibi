@@ -46,8 +46,170 @@ const anthropicEvents = (events: Array<[string, unknown]>): Recording =>
     .map(([name, data]) => `event: ${name}\ndata: ${JSON.stringify(data)}\n\n`)
     .join("");
 
-const openaiChunks = (chunks: unknown[]): Recording =>
-  `${chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("")}data: [DONE]\n\n`;
+/** Responses API events, each numbered as the API numbers them */
+const openaiEvents = (events: Array<Record<string, unknown>>): Recording =>
+  events
+    .map(
+      (event, sequence_number) =>
+        `event: ${String(event["type"])}\ndata: ${JSON.stringify({ ...event, sequence_number })}\n\n`,
+    )
+    .join("");
+
+const REASONING = {
+  id: "rs_1",
+  type: "reasoning",
+  summary: [],
+  encrypted_content: "enc-abc",
+};
+
+const responseShell = (
+  id: string,
+  status: string,
+  output: unknown[],
+  usage: unknown,
+) => ({
+  id,
+  object: "response",
+  created_at: 0,
+  status,
+  model: "gpt-6.1-sol",
+  output,
+  output_text: "",
+  error: null,
+  incomplete_details: null,
+  instructions: null,
+  metadata: {},
+  parallel_tool_calls: true,
+  temperature: 1,
+  tool_choice: "auto",
+  tools: [],
+  top_p: 1,
+  usage,
+});
+
+/** A response that reasons, says a line and asks to read a file */
+const OPENAI_TOOL_ROUND = (() => {
+  const message = {
+    id: "msg_1",
+    type: "message",
+    role: "assistant",
+    status: "completed",
+    content: [{ type: "output_text", text: "Vou olhar o arquivo.", annotations: [] }],
+  };
+  const call = {
+    id: "fc_1",
+    type: "function_call",
+    call_id: "call_1",
+    name: "read_file",
+    arguments: '{"path":"main.go"}',
+    status: "completed",
+  };
+  const usage = {
+    input_tokens: 3012,
+    input_tokens_details: { cached_tokens: 0, cache_write_tokens: 3000 },
+    output_tokens: 40,
+    output_tokens_details: { reasoning_tokens: 20 },
+    total_tokens: 3052,
+  };
+
+  return openaiEvents([
+    { type: "response.created", response: responseShell("resp_1", "in_progress", [], null) },
+    { type: "response.output_item.added", output_index: 0, item: REASONING },
+    { type: "response.output_item.done", output_index: 0, item: REASONING },
+    {
+      type: "response.output_item.added",
+      output_index: 1,
+      item: { ...message, status: "in_progress", content: [] },
+    },
+    {
+      type: "response.content_part.added",
+      output_index: 1,
+      item_id: "msg_1",
+      content_index: 0,
+      part: { type: "output_text", text: "", annotations: [] },
+    },
+    {
+      type: "response.output_text.delta",
+      output_index: 1,
+      item_id: "msg_1",
+      content_index: 0,
+      delta: "Vou olhar ",
+      logprobs: [],
+    },
+    {
+      type: "response.output_text.delta",
+      output_index: 1,
+      item_id: "msg_1",
+      content_index: 0,
+      delta: "o arquivo.",
+      logprobs: [],
+    },
+    { type: "response.output_item.done", output_index: 1, item: message },
+    {
+      type: "response.output_item.added",
+      output_index: 2,
+      item: { ...call, arguments: "", status: "in_progress" },
+    },
+    {
+      type: "response.function_call_arguments.delta",
+      output_index: 2,
+      item_id: "fc_1",
+      delta: '{"path":"main.go"}',
+    },
+    { type: "response.output_item.done", output_index: 2, item: call },
+    {
+      type: "response.completed",
+      response: responseShell("resp_1", "completed", [REASONING, message, call], usage),
+    },
+  ]);
+})();
+
+/** The answer after the tool result, with the prompt read back from the cache */
+const OPENAI_ANSWER = (() => {
+  const message = {
+    id: "msg_2",
+    type: "message",
+    role: "assistant",
+    status: "completed",
+    content: [{ type: "output_text", text: "Pronto.", annotations: [] }],
+  };
+  const usage = {
+    input_tokens: 3080,
+    input_tokens_details: { cached_tokens: 3000, cache_write_tokens: 0 },
+    output_tokens: 5,
+    output_tokens_details: { reasoning_tokens: 0 },
+    total_tokens: 3085,
+  };
+
+  return openaiEvents([
+    { type: "response.created", response: responseShell("resp_2", "in_progress", [], null) },
+    {
+      type: "response.output_item.added",
+      output_index: 0,
+      item: { ...message, status: "in_progress", content: [] },
+    },
+    {
+      type: "response.content_part.added",
+      output_index: 0,
+      item_id: "msg_2",
+      content_index: 0,
+      part: { type: "output_text", text: "", annotations: [] },
+    },
+    {
+      type: "response.output_text.delta",
+      output_index: 0,
+      item_id: "msg_2",
+      content_index: 0,
+      delta: "Pronto.",
+      logprobs: [],
+    },
+    { type: "response.output_item.done", output_index: 0, item: message },
+    {
+      type: "response.completed",
+      response: responseShell("resp_2", "completed", [message], usage),
+    },
+  ]);
+})();
 
 const MESSAGE_SHELL = {
   id: "msg_1",
@@ -346,49 +508,86 @@ describe("AnthropicProvider", () => {
 });
 
 describe("OpenAIProvider", () => {
-  test("counts cached tokens inside the prompt and sends one system message", async () => {
-    const server = replay([
-      openaiChunks([
-        {
-          id: "c1",
-          object: "chat.completion.chunk",
-          created: 0,
-          model: "gpt-4.1",
-          choices: [{ index: 0, delta: { role: "assistant", content: "oi" }, finish_reason: null }],
-        },
-        {
-          id: "c1",
-          object: "chat.completion.chunk",
-          created: 0,
-          model: "gpt-4.1",
-          choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-        },
-        {
-          id: "c1",
-          object: "chat.completion.chunk",
-          created: 0,
-          model: "gpt-4.1",
-          choices: [],
-          usage: {
-            prompt_tokens: 2000,
-            completion_tokens: 10,
-            total_tokens: 2010,
-            prompt_tokens_details: { cached_tokens: 1500 },
-          },
-        },
-      ]),
-    ]);
+  test("reads tool calls, usage and reasoning from a recorded Responses stream", async () => {
+    const server = replay([OPENAI_TOOL_ROUND]);
     cleanup.push(server.stop);
 
     const events = await collect(
-      new OpenAIProvider({ apiKey: "test", model: "gpt-4.1", baseURL: server.url }),
+      new OpenAIProvider({ apiKey: "test", model: "gpt-6.1-sol", baseURL: server.url }),
     );
 
+    expect(events.filter((e) => e.type === "text_delta")).toEqual([
+      { type: "text_delta", text: "Vou olhar " },
+      { type: "text_delta", text: "o arquivo." },
+    ]);
+    expect(events).toContainEqual({
+      type: "tool_call",
+      call: { id: "call_1", name: "read_file", arguments: { path: "main.go" } },
+    });
     expect(events).toContainEqual({
       type: "usage",
-      usage: { inputTokens: 2000, cachedInputTokens: 1500, outputTokens: 10 },
+      usage: {
+        inputTokens: 3012,
+        cachedInputTokens: 0,
+        cacheWriteTokens: 3000,
+        outputTokens: 40,
+      },
     });
-    const messages = server.bodies[0]!["messages"] as unknown[];
-    expect(messages[0]).toEqual({ role: "system", content: "rules\n\n<session>" });
+    expect(events.at(-1)).toMatchObject({ type: "done", stopReason: "tool_use" });
+  });
+
+  test("sends instructions, stores nothing and leaves out an empty tool list", async () => {
+    const server = replay([OPENAI_ANSWER]);
+    cleanup.push(server.stop);
+
+    await collect(
+      new OpenAIProvider({ apiKey: "test", model: "gpt-6.1-sol", baseURL: server.url }),
+    );
+
+    const body = server.bodies[0]!;
+    expect(body["instructions"]).toBe("rules\n\n<session>");
+    expect(body["store"]).toBe(false);
+    expect(body["tools"]).toBeUndefined();
+    expect(body["input"]).toEqual([{ role: "user", content: "oi" }]);
+  });
+
+  test("a tutor turn sends the reasoning item back with the call and its output", async () => {
+    const server = replay([OPENAI_TOOL_ROUND, OPENAI_ANSWER]);
+    const home = await mkdtemp(join(tmpdir(), "hibi-adapter-"));
+    cleanup.push(server.stop, () => rm(home, { recursive: true, force: true }));
+
+    const tutor = new TutorSession(
+      {
+        provider: new OpenAIProvider({
+          apiKey: "test",
+          model: "gpt-6.1-sol",
+          baseURL: server.url,
+        }),
+        storage: new StorageLocal(home),
+        workspace,
+        clock: { now: () => NOW },
+      },
+      newSessionState("s1" as SessionId, "local" as UserId, "/tmp/repo", NOW),
+    );
+
+    const texts: string[] = [];
+    for await (const event of tutor.turn("o que tem no main.go?")) {
+      if (event.type === "text") texts.push(event.text);
+      if (event.type === "error") throw new Error(event.message);
+    }
+
+    expect(texts.join("")).toBe("Vou olhar o arquivo.Pronto.");
+    const input = server.bodies[1]!["input"] as Array<Record<string, unknown>>;
+    expect(input.slice(-4).map((item) => item["type"] ?? item["role"])).toEqual([
+      "reasoning",
+      "message",
+      "function_call",
+      "function_call_output",
+    ]);
+    expect(input.at(-4)).toMatchObject({ id: "rs_1", encrypted_content: "enc-abc" });
+    expect(input.at(-1)).toMatchObject({
+      type: "function_call_output",
+      call_id: "call_1",
+    });
   });
 });

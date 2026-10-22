@@ -22,10 +22,10 @@ export interface ModelChoice {
 /** Offered per provider, recommended first. The first one is what a new key starts with */
 export const MODEL_CHOICES: Record<ProviderId, ModelChoice[]> = {
   openai: [
-    { id: "gpt-4.1", label: "gpt-4.1", note: "recommended" },
+    { id: "gpt-6.1-sol", label: "gpt-6.1-sol", note: "recommended" },
     {
-      id: "gpt-4.1-mini",
-      label: "gpt-4.1-mini",
+      id: "gpt-6-luna",
+      label: "gpt-6-luna",
       note: "cheaper, may give full answers",
     },
   ],
@@ -118,6 +118,8 @@ const PRICES: Record<string, Price> = {
     cacheWrite: 1.25,
     output: 5,
   },
+  "gpt-6.1-sol": { input: 2, cacheRead: 0.1, cacheWrite: 2.5, output: 10 },
+  "gpt-6-luna": { input: 0.1, cacheRead: 0.01, cacheWrite: 0.125, output: 0.5 },
   "gpt-4.1": { input: 2, cacheRead: 0.5, cacheWrite: 2, output: 8 },
   "gpt-4.1-mini": { input: 0.4, cacheRead: 0.1, cacheWrite: 0.4, output: 1.6 },
 };

@@ -31,8 +31,12 @@ import { isIdle, renewSession } from "./lifecycle";
 import { buildSystemPrompt } from "./prompt";
 
 const MAX_TOOL_ROUNDS = 5;
-/** Leaves room for reasoning, which counts toward the limit on models that reason before answering */
-const MAX_TOKENS = 16_000;
+/**
+ * Leaves room for reasoning, which counts toward the limit on models that
+ * reason before answering. OpenAI suggests reserving at least this much;
+ * only the tokens actually generated are billed
+ */
+const MAX_TOKENS = 25_000;
 const MAX_RETRIES = 2;
 const RETRY_BASE_MS = 500;
 
