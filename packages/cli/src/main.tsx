@@ -12,7 +12,13 @@ import {
   type SessionState,
   type UserId,
 } from "@hibi/core";
-import { Daemon, findRepoRoot, serve, socketPath } from "@hibi/daemon";
+import {
+  Daemon,
+  findRepoRoot,
+  serve,
+  socketPath,
+  type RequestBody,
+} from "@hibi/daemon";
 
 import { DaemonClient } from "./client";
 import {
@@ -38,8 +44,6 @@ import { App, type CommandResult } from "./ui/App";
 import type { WelcomeContent } from "./ui/Welcome";
 
 const LOCAL_USER = "local" as UserId;
-const AUTOSTART_TIMEOUT_MS = 8000;
-const AUTOSTART_POLL_MS = 100;
 
 const PREFERENCE_KEYS = [
   "name",
@@ -67,40 +71,16 @@ async function runDaemon(): Promise<void> {
 }
 
 /**
- * Connects to the user's daemon, spawning it detached when none is running.
- * It runs from the home directory, so it never holds a project folder open
+ * Starts the user's daemon detached. It runs from the home directory, so it
+ * never holds a project folder open
  */
-async function ensureDaemon(strings: Catalog): Promise<DaemonClient> {
-  const path = socketPath(HIBI_HOME);
-
-  try {
-    const client = new DaemonClient();
-    await client.connect(path);
-    return client;
-  } catch {
-    stdout.write(`${ui.dim(strings.starting)}\n`);
-  }
-
+function spawnDaemon(): void {
   Bun.spawn(["bun", import.meta.path, "daemon"], {
     cwd: homedir(),
     stdin: "ignore",
     stdout: "ignore",
     stderr: "inherit",
   }).unref();
-
-  const deadline = Date.now() + AUTOSTART_TIMEOUT_MS;
-
-  for (;;) {
-    await new Promise((resolve) => setTimeout(resolve, AUTOSTART_POLL_MS));
-    try {
-      const client = new DaemonClient();
-      await client.connect(path);
-      return client;
-    } catch {
-      if (Date.now() > deadline)
-        throw new Error("daemon did not start in time");
-    }
-  }
 }
 
 async function chat(repoRoot: string): Promise<void> {
@@ -123,15 +103,23 @@ async function chat(repoRoot: string): Promise<void> {
   const language = learner.preferences.language;
   const strings = catalogFor(language);
   const provider = buildProvider(credentials);
-  const client = await ensureDaemon(strings);
+  let rendering = false;
+  const client = new DaemonClient({
+    path: socketPath(HIBI_HOME),
+    root: repoRoot,
+    start: () => {
+      if (!rendering) stdout.write(`${ui.dim(strings.starting)}\n`);
+      spawnDaemon();
+    },
+  });
 
-  const refusal = await client.openSpace(repoRoot);
+  const refusal = await client.open();
   if (refusal !== null) {
     process.stderr.write(`${refusal}\n`);
-    client.close();
     return;
   }
 
+  rendering = true;
   const { waitUntilExit } = render(
     <App
       client={client}
@@ -218,29 +206,23 @@ async function handleCommand(
       return { help: argument === "all" ? "full" : "short" };
 
     case "/state":
-      return {
-        output: await query(client, { type: "state" }, (payload) =>
-          showRaw
-            ? JSON.stringify(payload, null, 2)
-            : formatState(payload as SessionState),
-        ),
-      };
+      return query(client, { type: "state" }, (payload) =>
+        showRaw
+          ? JSON.stringify(payload, null, 2)
+          : formatState(payload as SessionState),
+      );
 
     case "/profile":
-      return {
-        output: await query(client, { type: "profile" }, (payload) =>
-          showRaw
-            ? JSON.stringify(payload, null, 2)
-            : formatProfile(payload as LearnerModel),
-        ),
-      };
+      return query(client, { type: "profile" }, (payload) =>
+        showRaw
+          ? JSON.stringify(payload, null, 2)
+          : formatProfile(payload as LearnerModel),
+      );
 
     case "/signals":
-      return {
-        output: await query(client, { type: "signals" }, (payload) =>
-          formatSignals(payload as InferredSignal[]),
-        ),
-      };
+      return query(client, { type: "signals" }, (payload) =>
+        formatSignals(payload as InferredSignal[]),
+      );
 
     case "/prefs":
       return handlePrefs(raw, client, storage, strings);
@@ -256,22 +238,19 @@ async function handleCommand(
       return { output: strings.restartNeeded };
 
     case "/index":
-      await client.sendAndWait({ type: "reindex" });
-      return {};
+      return perform(client, { type: "reindex" });
 
     case "/undo":
-      await client.sendAndWait({ type: "undo" });
-      return {};
+      return perform(client, { type: "undo" });
 
     case "/clear":
-      await client.sendAndWait({ type: "clear" });
-      return {};
+      return perform(client, { type: "clear" });
 
     case "/forget":
       return handleForget(raw, client, strings);
 
     case "/stop":
-      await client.sendAndWait({ type: "shutdown" });
+      await client.request({ type: "shutdown" });
       return { exit: true };
 
     default:
@@ -279,30 +258,39 @@ async function handleCommand(
   }
 }
 
+/** Sends a command and shows the daemon's confirmation or error */
+async function perform(
+  client: DaemonClient,
+  body: RequestBody,
+): Promise<CommandResult> {
+  const result: CommandResult = {};
+
+  await client.request(body, (event) => {
+    if (event.type === "ok") result.notice = event.message;
+    if (event.type === "error") result.error = event.message;
+  });
+  return result;
+}
+
+/** Sends a query and formats the payload it returns */
 async function query(
   client: DaemonClient,
-  payload: Parameters<DaemonClient["sendAndWait"]>[0],
+  body: RequestBody,
   format: (data: unknown) => string,
-): Promise<string> {
-  let output = "";
-  const previous = client.takeHandler();
+): Promise<CommandResult> {
+  const result: CommandResult = {};
 
-  client.onEvent((event) => {
+  await client.request(body, (event) => {
     if (
       event.type === "state" ||
       event.type === "profile" ||
       event.type === "signals"
     ) {
-      output = format(event.payload);
-      return;
+      result.output = format(event.payload);
     }
-    previous?.(event);
+    if (event.type === "error") result.error = event.message;
   });
-
-  await client.sendAndWait(payload);
-  if (previous !== null) client.onEvent(previous);
-
-  return output;
+  return result;
 }
 
 async function handlePrefs(
@@ -326,8 +314,7 @@ async function handlePrefs(
     return { output: [...lines, "", strings.changeWith].join("\n") };
   }
 
-  await client.sendAndWait({ type: "set_preference", key, value });
-  return {};
+  return perform(client, { type: "set_preference", key, value });
 }
 
 async function describeModel(input: string, strings: Catalog): Promise<string> {
@@ -384,18 +371,12 @@ async function handleForget(
   if (target === undefined) return { help: "full" };
 
   if (target !== "all") {
-    await client.sendAndWait({
-      type: "forget",
-      scope: "concept",
-      value: target,
-    });
-    return {};
+    return perform(client, { type: "forget", scope: "concept", value: target });
   }
 
   if (confirmation !== "forget") return { output: strings.forgetWarning };
 
-  await client.sendAndWait({ type: "forget", scope: "all" });
-  return {};
+  return perform(client, { type: "forget", scope: "all" });
 }
 
 const [command] = process.argv.slice(2);

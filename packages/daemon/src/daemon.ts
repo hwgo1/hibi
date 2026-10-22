@@ -18,7 +18,7 @@ import {
   type UserId,
 } from "@hibi/core";
 
-import type { ClientRequest, ServerEvent } from "./protocol";
+import type { ClientRequest, Reply, ServerEvent } from "./protocol";
 import { TurnQueue } from "./turn-queue";
 
 const LOCAL_USER = "local" as UserId;
@@ -30,6 +30,8 @@ export interface Client {
 
 /** Everything but `shutdown`, which belongs to the transport that owns the process */
 export type DaemonRequest = Exclude<ClientRequest, { type: "shutdown" }>;
+
+type Answerable = Exclude<DaemonRequest, { type: "message" }>;
 
 export interface DaemonOptions {
   provider: LLMProvider;
@@ -43,6 +45,11 @@ interface Space {
   tutor: TutorSession;
   clients: Set<Client>;
 }
+
+const NO_SPACE: Reply = {
+  type: "error",
+  message: "no space is open: send open_space first",
+};
 
 export function repoKey(repoRoot: string): string {
   return createHash("sha256").update(repoRoot).digest("hex").slice(0, 16);
@@ -65,73 +72,29 @@ export class Daemon {
     this.storage = new StorageLocal(options.home ?? join(homedir(), ".hibi"));
   }
 
+  /**
+   * Every request ends with `done` under its id. A message's events go to
+   * every client on the space; any other request is answered to its sender
+   * only
+   */
   async handle(request: DaemonRequest, client: Client): Promise<void> {
-    switch (request.type) {
-      case "open_space":
-        await this.openSpace(request.root, client);
-        return;
-
-      case "profile": {
-        const learner = await this.storage.loadLearnerModel(LOCAL_USER);
-        this.reply(client, { type: "profile", payload: learner });
+    if (request.type === "message") {
+      const space = this.attached.get(client);
+      if (space === undefined) {
+        this.answer(client, request.id, [NO_SPACE]);
         return;
       }
-
-      case "signals": {
-        const learner = await this.storage.loadLearnerModel(LOCAL_USER);
-        this.reply(client, {
-          type: "signals",
-          payload: learner?.inferredSignals ?? [],
-        });
-        return;
-      }
-
-      case "set_preference":
-        await this.setPreference(request.key, request.value, client);
-        return;
-    }
-
-    const space = this.attached.get(client);
-    if (space === undefined) {
-      this.reply(client, {
-        type: "error",
-        message: "no space is open: send open_space first",
-      });
+      await this.queue.run(() => this.runTurn(space, request.id, request.text));
       return;
     }
 
-    switch (request.type) {
-      case "message":
-        await this.queue.run(() => this.runTurn(space, request.text));
-        return;
-
-      case "state":
-        this.reply(client, { type: "state", payload: space.tutor.session });
-        return;
-
-      case "undo":
-        await this.command(client, () => space.tutor.undo());
-        return;
-
-      case "forget":
-        await this.command(client, () => {
-          if (request.scope === "all") return space.tutor.forgetAll();
-          if (request.value === undefined) {
-            return Promise.resolve({ ok: false, message: "which concept?" });
-          }
-          return space.tutor.forget(request.value);
-        });
-        return;
-
-      case "clear":
-        space.tutor.clearTranscript();
-        this.reply(client, { type: "ok", message: "conversation cleared" });
-        return;
-
-      case "reindex":
-        await this.reindex(space.root, client);
-        return;
+    let replies: Reply[];
+    try {
+      replies = await this.dispatch(request, client);
+    } catch (error) {
+      replies = [{ type: "error", message: messageOf(error) }];
     }
+    this.answer(client, request.id, replies);
   }
 
   /** Stops routing events to a connection that went away */
@@ -140,20 +103,71 @@ export class Daemon {
     this.attached.delete(client);
   }
 
-  private async openSpace(root: string, client: Client): Promise<void> {
+  private async dispatch(request: Answerable, client: Client): Promise<Reply[]> {
+    switch (request.type) {
+      case "open_space":
+        return this.openSpace(request.root, client);
+
+      case "profile":
+        return [
+          {
+            type: "profile",
+            payload: await this.storage.loadLearnerModel(LOCAL_USER),
+          },
+        ];
+
+      case "signals": {
+        const learner = await this.storage.loadLearnerModel(LOCAL_USER);
+        return [{ type: "signals", payload: learner?.inferredSignals ?? [] }];
+      }
+
+      case "set_preference":
+        return this.queue.run(() =>
+          this.setPreference(request.key, request.value),
+        );
+    }
+
+    const space = this.attached.get(client);
+    if (space === undefined) return [NO_SPACE];
+
+    switch (request.type) {
+      case "state":
+        return [{ type: "state", payload: space.tutor.session }];
+
+      case "undo":
+        return this.command(() => space.tutor.undo());
+
+      case "forget":
+        return this.command(() => {
+          if (request.scope === "all") return space.tutor.forgetAll();
+          if (request.value === undefined) {
+            return Promise.resolve({ ok: false, message: "which concept?" });
+          }
+          return space.tutor.forget(request.value);
+        });
+
+      case "clear":
+        return this.queue.run(async () => {
+          space.tutor.clearTranscript();
+          return [{ type: "ok", message: "conversation cleared" }];
+        });
+
+      case "reindex":
+        return this.queue.run(() => this.reindex(space.root));
+    }
+  }
+
+  private async openSpace(root: string, client: Client): Promise<Reply[]> {
     const absolute = resolve(root);
     const problem = await rootProblem(absolute);
-    if (problem !== null) {
-      this.reply(client, { type: "error", message: problem });
-      return;
-    }
+    if (problem !== null) return [{ type: "error", message: problem }];
 
     const space = await this.loadSpace(absolute);
     this.detach(client);
     space.clients.add(client);
     this.attached.set(client, space);
 
-    this.reply(client, { type: "space", id: space.id, root: space.root });
+    return [{ type: "space", id: space.id, root: space.root }];
   }
 
   /** Loads a space on first use. The promise is cached, so two clients opening the same root share one tutor */
@@ -207,71 +221,47 @@ export class Daemon {
    * Validates a single preference against the schema before writing, so an
    * unknown key or an invalid value is rejected
    */
-  private async setPreference(
-    key: string,
-    value: string,
-    client: Client,
-  ): Promise<void> {
+  private async setPreference(key: string, value: string): Promise<Reply[]> {
     const learner = await this.storage.loadLearnerModel(LOCAL_USER);
-
-    if (learner === null) {
-      this.reply(client, { type: "error", message: "no profile yet" });
-      return;
-    }
+    if (learner === null) return [{ type: "error", message: "no profile yet" }];
 
     if (!Object.keys(learner.preferences).includes(key)) {
-      this.reply(client, {
-        type: "error",
-        message: `unknown preference: ${key}`,
-      });
-      return;
+      return [{ type: "error", message: `unknown preference: ${key}` }];
     }
 
     const parsed = TeachingPreferencesSchema.safeParse({
       ...learner.preferences,
       [key]: value,
     });
-
     if (!parsed.success) {
-      this.reply(client, {
-        type: "error",
-        message: `invalid value for ${key}: ${value}`,
-      });
-      return;
+      return [{ type: "error", message: `invalid value for ${key}: ${value}` }];
     }
 
     learner.preferences = parsed.data;
     learner.updatedAt = this.clock.now().toISOString();
     await this.storage.saveLearnerModel(learner);
 
-    this.reply(client, { type: "ok", message: `${key} = ${value}` });
+    return [{ type: "ok", message: `${key} = ${value}` }];
   }
 
   /** Runs a state-changing command in turn order, so it never interleaves with a turn */
-  private async command(
-    client: Client,
-    run: () => Promise<CommandOutcome>,
-  ): Promise<void> {
+  private async command(run: () => Promise<CommandOutcome>): Promise<Reply[]> {
     const result = await this.queue.run(run);
-    this.reply(client, {
-      type: result.ok ? "ok" : "error",
-      message: result.message,
-    });
+    return [{ type: result.ok ? "ok" : "error", message: result.message }];
   }
 
-  private async reindex(root: string, client: Client): Promise<void> {
+  private async reindex(root: string): Promise<Reply[]> {
     try {
       const model = await indexRepo(root, this.clock.now());
       await this.storage.saveRepoModel(model);
-      this.reply(client, {
-        type: "ok",
-        message: `indexed ${model.fileStats.total} files, ${model.fileStats.user} yours`,
-      });
+      return [
+        {
+          type: "ok",
+          message: `indexed ${model.fileStats.total} files, ${model.fileStats.user} yours`,
+        },
+      ];
     } catch (error) {
-      this.reply(client, {
-        type: "error",
-        message: `index failed: ${String(error)}`,
-      });
+      return [{ type: "error", message: `index failed: ${messageOf(error)}` }];
     }
   }
 
@@ -280,8 +270,13 @@ export class Daemon {
    * in the terminal also reaches an editor panel on the same space, and to
    * no one in other spaces
    */
-  private async runTurn(space: Space, text: string): Promise<void> {
-    const send = (event: ServerEvent) => {
+  private async runTurn(
+    space: Space,
+    requestId: string,
+    text: string,
+  ): Promise<void> {
+    const send = (reply: Reply) => {
+      const event: ServerEvent = { ...reply, requestId, spaceId: space.id };
       for (const client of space.clients) client.send(event);
     };
 
@@ -304,10 +299,7 @@ export class Daemon {
         }
       }
     } catch (error) {
-      send({
-        type: "error",
-        message: error instanceof Error ? error.message : String(error),
-      });
+      send({ type: "error", message: messageOf(error) });
     }
 
     const session = space.tutor.session;
@@ -318,14 +310,17 @@ export class Daemon {
       send({ type: "step", step: active.ladder.step });
     }
 
-    send({ type: "turn_end" });
+    send({ type: "done" });
   }
 
-  /** Answers one client and closes the exchange */
-  private reply(client: Client, event: ServerEvent): void {
-    client.send(event);
-    client.send({ type: "turn_end" });
+  private answer(client: Client, requestId: string, replies: Reply[]): void {
+    for (const reply of replies) client.send({ ...reply, requestId });
+    client.send({ type: "done", requestId });
   }
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /**

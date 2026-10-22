@@ -7,7 +7,9 @@ import {
   type ReactElement,
 } from "react";
 
-import type { DaemonClient } from "../client";
+import type { ServerEvent } from "@hibi/daemon";
+
+import { DaemonLostError, type DaemonClient } from "../client";
 import type { HelpContent } from "../help";
 import type { Catalog } from "../i18n";
 import {
@@ -27,6 +29,9 @@ const FLUSH_MS = 60;
 
 export interface CommandResult {
   output?: string;
+  /** A short confirmation from the daemon, shown quieter than output */
+  notice?: string;
+  error?: string;
   help?: "short" | "full";
   exit?: boolean;
 }
@@ -68,47 +73,40 @@ export function App({
     ]);
   }, []);
 
-  useEffect(() => {
-    client.onEvent((event) => {
-      switch (event.type) {
-        case "text":
-          stream.current += event.text;
-          return;
+  const onTurnEvent = useCallback((event: ServerEvent) => {
+    switch (event.type) {
+      case "text":
+        stream.current += event.text;
+        return;
 
-        case "tool":
-          if (event.name === "give_hint") hintGiven.current = true;
-          return;
+      case "tool":
+        if (event.name === "give_hint") hintGiven.current = true;
+        return;
 
-        case "step":
-          if (hintGiven.current) turnStep.current = event.step;
-          return;
+      case "step":
+        if (hintGiven.current) turnStep.current = event.step;
+        return;
 
-        case "usage":
-          spend.current = addUsage(
-            spend.current,
-            {
-              inputTokens: event.inputTokens,
-              cachedInputTokens: event.cachedInputTokens,
-              outputTokens: event.outputTokens,
-            },
-            event.model,
-          );
-          return;
+      case "usage":
+        spend.current = addUsage(
+          spend.current,
+          {
+            inputTokens: event.inputTokens,
+            cachedInputTokens: event.cachedInputTokens,
+            outputTokens: event.outputTokens,
+          },
+          event.model,
+        );
+        return;
 
-        case "error":
-          if (busyRef.current) turnErrors.current.push(event.message);
-          else append({ kind: "error", text: event.message });
-          return;
+      case "error":
+        turnErrors.current.push(event.message);
+        return;
 
-        case "ok":
-          append({ kind: "system", text: event.message });
-          return;
-
-        default:
-          return;
-      }
-    });
-  }, [client, append]);
+      default:
+        return;
+    }
+  }, []);
 
   useEffect(() => {
     if (!busy) return;
@@ -159,11 +157,20 @@ export function App({
       }
 
       if (text.startsWith("/")) {
-        const result = await onCommand(text);
+        let result: CommandResult;
+        try {
+          result = await onCommand(text);
+        } catch (error) {
+          result = { error: failureText(error, strings) };
+        }
         if (result.help !== undefined)
           append({ kind: "help", full: result.help === "full" });
         if (result.output !== undefined)
           append({ kind: "output", text: result.output });
+        if (result.notice !== undefined)
+          append({ kind: "system", text: result.notice });
+        if (result.error !== undefined)
+          append({ kind: "error", text: result.error });
         if (result.exit === true) exit();
         return;
       }
@@ -171,13 +178,17 @@ export function App({
       busyRef.current = true;
       setBusy(true);
 
-      await client.sendAndWait({ type: "message", text });
+      try {
+        await client.request({ type: "message", text }, onTurnEvent);
+      } catch (error) {
+        turnErrors.current.push(failureText(error, strings));
+      }
 
       busyRef.current = false;
       setBusy(false);
       finishTurn();
     },
-    [append, client, exit, finishTurn, onCommand],
+    [append, client, exit, finishTurn, onCommand, onTurnEvent, strings],
   );
 
   return (
@@ -213,4 +224,10 @@ export function App({
       )}
     </>
   );
+}
+
+/** What the learner reads when a request fails outside the tutor */
+function failureText(error: unknown, strings: Catalog): string {
+  if (error instanceof DaemonLostError) return strings.daemonLost;
+  return error instanceof Error ? error.message : String(error);
 }

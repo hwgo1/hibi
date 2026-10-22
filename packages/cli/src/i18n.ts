@@ -5,6 +5,7 @@ type StringKey =
   | "hint"
   | "weakModel"
   | "starting"
+  | "daemonLost"
   | "thinking"
   | "hintOf"
   | "unknownCommand"
@@ -50,6 +51,8 @@ const CATALOGS: Record<string, Catalog> = {
     weakModel:
       "The {model} model sometimes hands over the full answer. To learn better, use the recommended one: /model",
     starting: "starting…",
+    daemonLost:
+      "The connection to hibi dropped. Send it again and hibi reconnects.",
     thinking: "thinking",
     hintOf: "hint {step} of 3",
     unknownCommand:
@@ -90,6 +93,8 @@ const CATALOGS: Record<string, Catalog> = {
     weakModel:
       "O modelo {model} às vezes entrega a resposta pronta. Para aprender melhor, use o recomendado: /model",
     starting: "iniciando…",
+    daemonLost:
+      "A conexão com o hibi caiu. Envie de novo que o hibi reconecta.",
     thinking: "pensando",
     hintOf: "dica {step} de 3",
     unknownCommand:
@@ -130,6 +135,8 @@ const CATALOGS: Record<string, Catalog> = {
     weakModel:
       "El modelo {model} a veces entrega la respuesta completa. Para aprender mejor, usa el recomendado: /model",
     starting: "iniciando…",
+    daemonLost:
+      "Se cayó la conexión con hibi. Envíalo de nuevo y hibi se reconecta.",
     thinking: "pensando",
     hintOf: "pista {step} de 3",
     unknownCommand:

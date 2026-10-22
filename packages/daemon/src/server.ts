@@ -31,54 +31,77 @@ export async function serve(daemon: Daemon, home: string): Promise<void> {
   const path = socketPath(home);
   if (!WINDOWS) await rm(path, { force: true });
 
-  const stop = async (): Promise<never> => {
-    await releaseLock(lockPath);
-    if (!WINDOWS) await rm(path, { force: true });
-    process.exit(0);
+  const inflight = new Set<Promise<void>>();
+  const lifecycle: Lifecycle = {
+    track(work) {
+      inflight.add(work);
+      void work.finally(() => inflight.delete(work));
+    },
+    async stop(beforeExit) {
+      await Promise.allSettled([...inflight]);
+      await beforeExit?.();
+      await releaseLock(lockPath);
+      if (!WINDOWS) await rm(path, { force: true });
+      process.exit(0);
+    },
   };
 
-  const server = createServer((socket) => attach(daemon, socket, stop));
+  const server = createServer((socket) => attach(daemon, socket, lifecycle));
   await new Promise<void>((resolve) => server.listen(path, resolve));
 
-  process.on("SIGINT", () => void stop());
-  process.on("SIGTERM", () => void stop());
+  process.on("SIGINT", () => void lifecycle.stop());
+  process.on("SIGTERM", () => void lifecycle.stop());
 }
 
-function attach(daemon: Daemon, socket: Socket, stop: () => Promise<never>) {
-  const client: Client = { send: (event) => socket.write(encode(event)) };
+interface Lifecycle {
+  /** Keeps the process alive until `work` settles */
+  track(work: Promise<void>): void;
+  /** Lets every request already received finish, then releases the socket and the lock and exits */
+  stop(beforeExit?: () => Promise<void>): Promise<never>;
+}
+
+function attach(daemon: Daemon, socket: Socket, lifecycle: Lifecycle) {
+  const client: Client = {
+    send: (event) => {
+      if (!socket.destroyed) socket.write(encode(event));
+    },
+  };
   socket.setNoDelay(true);
   let buffer = "";
 
   socket.on("data", (chunk) => {
     buffer += chunk.toString();
-    const { messages, rest } = decodeLines<unknown>(buffer);
+    const { messages, rest } = decodeLines(buffer);
     buffer = rest;
 
     for (const raw of messages) {
       const parsed = ClientRequestSchema.safeParse(raw);
       if (!parsed.success) {
-        client.send({ type: "error", message: "malformed request" });
-        client.send({ type: "turn_end" });
+        const requestId = idOf(raw);
+        client.send({ type: "error", message: "malformed request", requestId });
+        client.send({ type: "done", requestId });
         continue;
       }
 
       const request = parsed.data;
       if (request.type === "shutdown") {
-        client.send({ type: "turn_end" });
-        void stop();
+        const done = encode({ type: "done", requestId: request.id });
+        void lifecycle.stop(
+          () => new Promise((resolve) => socket.write(done, () => resolve())),
+        );
         return;
       }
 
-      daemon.handle(request, client).catch((error: unknown) => {
-        client.send({
-          type: "error",
-          message: error instanceof Error ? error.message : String(error),
-        });
-        client.send({ type: "turn_end" });
-      });
+      lifecycle.track(daemon.handle(request, client));
     }
   });
 
   socket.on("close", () => daemon.detach(client));
   socket.on("error", () => daemon.detach(client));
+}
+
+/** The id of a request that failed validation, when it has a usable one, so the sender can still match the error */
+function idOf(raw: unknown): string {
+  const id = (raw as { id?: unknown } | null)?.id;
+  return typeof id === "string" ? id : "";
 }

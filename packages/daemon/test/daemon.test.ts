@@ -10,8 +10,8 @@ import {
   type SessionId,
 } from "@hibi/core";
 
-import { Daemon, type Client } from "../src/daemon";
-import type { ServerEvent } from "../src/protocol";
+import { Daemon, type Client, type DaemonRequest } from "../src/daemon";
+import type { RequestBody, ServerEvent } from "../src/protocol";
 
 interface TestClient extends Client {
   events: ServerEvent[];
@@ -20,6 +20,16 @@ interface TestClient extends Client {
 function client(): TestClient {
   const events: ServerEvent[] = [];
   return { events, send: (event) => events.push(event) };
+}
+
+let counter = 0;
+type Body = Exclude<RequestBody, { type: "shutdown" }>;
+
+/** Sends a request under a fresh id and returns that id */
+async function send(d: Daemon, c: Client, body: Body): Promise<string> {
+  const id = `t${++counter}`;
+  await d.handle({ ...body, id } as DaemonRequest, c);
+  return id;
 }
 
 const reply = (text: string): CompletionEvent[] => [
@@ -34,6 +44,9 @@ const spaceOf = (c: TestClient) => {
   const event = c.events.find((e) => e.type === "space");
   return event?.type === "space" ? event : undefined;
 };
+
+const of = (c: TestClient, id: string) =>
+  c.events.filter((event) => event.requestId === id);
 
 let base = "";
 let home = "";
@@ -56,17 +69,61 @@ function daemon(...script: CompletionEvent[][]): Daemon {
   return new Daemon({ provider: new FakeProvider(script), home });
 }
 
+describe("Daemon requests", () => {
+  test("every event carries its request id, and each request ends with done", async () => {
+    const d = daemon(reply("hello"));
+    const c = client();
+
+    const open = await send(d, c, { type: "open_space", root: repoA });
+    const message = await send(d, c, { type: "message", text: "hi" });
+
+    expect(of(c, open).map((e) => e.type)).toEqual(["space", "done"]);
+    expect(of(c, message).at(-1)?.type).toBe("done");
+    expect(of(c, message).every((e) => e.spaceId === spaceOf(c)?.id)).toBe(
+      true,
+    );
+    expect(c.events.every((e) => e.requestId === open || e.requestId === message)).toBe(true);
+  });
+
+  test("answers a command with its outcome under the command's id", async () => {
+    const d = daemon(reply("one"));
+    const c = client();
+
+    await send(d, c, { type: "open_space", root: repoA });
+    await send(d, c, { type: "message", text: "hi" });
+    const undo = await send(d, c, { type: "undo" });
+    const again = await send(d, c, { type: "undo" });
+
+    expect(of(c, undo)[0]).toMatchObject({ type: "ok" });
+    expect(of(c, again)[0]).toMatchObject({
+      type: "error",
+      message: "nothing to undo",
+    });
+  });
+
+  test("rejects an unknown preference without touching the profile", async () => {
+    const c = client();
+    const id = await send(daemon(), c, {
+      type: "set_preference",
+      key: "colour",
+      value: "red",
+    });
+
+    expect(of(c, id).map((e) => e.type)).toEqual(["error", "done"]);
+  });
+});
+
 describe("Daemon spaces", () => {
   test("two folders become two spaces, and a turn reaches only its own", async () => {
     const d = daemon(reply("hello from a"));
     const a = client();
     const b = client();
 
-    await d.handle({ type: "open_space", root: repoA }, a);
-    await d.handle({ type: "open_space", root: repoB }, b);
+    await send(d, a, { type: "open_space", root: repoA });
+    await send(d, b, { type: "open_space", root: repoB });
     expect(spaceOf(a)?.id).not.toBe(spaceOf(b)?.id);
 
-    await d.handle({ type: "message", text: "hi" }, a);
+    await send(d, a, { type: "message", text: "hi" });
 
     expect(texts(a)).toEqual(["hello from a"]);
     expect(texts(b)).toEqual([]);
@@ -77,13 +134,14 @@ describe("Daemon spaces", () => {
     const terminal = client();
     const panel = client();
 
-    await d.handle({ type: "open_space", root: repoA }, terminal);
-    await d.handle({ type: "open_space", root: repoA }, panel);
+    await send(d, terminal, { type: "open_space", root: repoA });
+    await send(d, panel, { type: "open_space", root: repoA });
     expect(spaceOf(terminal)?.id).toBe(spaceOf(panel)?.id);
 
-    await d.handle({ type: "message", text: "hi" }, terminal);
+    const id = await send(d, terminal, { type: "message", text: "hi" });
 
     expect(texts(panel)).toEqual(["shared"]);
+    expect(of(panel, id).at(-1)?.type).toBe("done");
   });
 
   test("each space keeps its own session, and a new daemon resumes it", async () => {
@@ -91,11 +149,11 @@ describe("Daemon spaces", () => {
     const a = client();
     const b = client();
 
-    await first.handle({ type: "open_space", root: repoA }, a);
-    await first.handle({ type: "open_space", root: repoB }, b);
-    await first.handle({ type: "message", text: "x" }, a);
-    await first.handle({ type: "message", text: "y" }, a);
-    await first.handle({ type: "message", text: "z" }, b);
+    await send(first, a, { type: "open_space", root: repoA });
+    await send(first, b, { type: "open_space", root: repoB });
+    await send(first, a, { type: "message", text: "x" });
+    await send(first, a, { type: "message", text: "y" });
+    await send(first, b, { type: "message", text: "z" });
 
     const storage = new StorageLocal(home);
     const sessionA = await storage.loadSession(spaceOf(a)!.id as SessionId);
@@ -105,8 +163,8 @@ describe("Daemon spaces", () => {
 
     const again = client();
     const second = daemon();
-    await second.handle({ type: "open_space", root: repoA }, again);
-    await second.handle({ type: "state" }, again);
+    await send(second, again, { type: "open_space", root: repoA });
+    await send(second, again, { type: "state" });
 
     const state = again.events.find((event) => event.type === "state");
     expect(state?.type === "state" && state.payload).toMatchObject({
@@ -119,10 +177,10 @@ describe("Daemon spaces", () => {
     const gone = client();
     const stays = client();
 
-    await d.handle({ type: "open_space", root: repoA }, gone);
-    await d.handle({ type: "open_space", root: repoA }, stays);
+    await send(d, gone, { type: "open_space", root: repoA });
+    await send(d, stays, { type: "open_space", root: repoA });
     d.detach(gone);
-    await d.handle({ type: "message", text: "hi" }, stays);
+    await send(d, stays, { type: "message", text: "hi" });
 
     expect(texts(gone)).toEqual([]);
     expect(texts(stays)).toEqual(["after"]);
@@ -132,12 +190,16 @@ describe("Daemon spaces", () => {
 describe("Daemon refusals", () => {
   test("space requests wait for open_space", async () => {
     const c = client();
-    await daemon().handle({ type: "message", text: "hi" }, c);
+    const id = await send(daemon(), c, { type: "message", text: "hi" });
 
-    expect(c.events[0]).toEqual({
-      type: "error",
-      message: "no space is open: send open_space first",
-    });
+    expect(of(c, id)).toEqual([
+      {
+        type: "error",
+        message: "no space is open: send open_space first",
+        requestId: id,
+      },
+      { type: "done", requestId: id },
+    ]);
   });
 
   test.each([
@@ -146,7 +208,7 @@ describe("Daemon refusals", () => {
     ["a missing folder", () => join(base, "missing")],
   ])("refuses %s as a space root", async (_, root) => {
     const c = client();
-    await daemon().handle({ type: "open_space", root: root() }, c);
+    await send(daemon(), c, { type: "open_space", root: root() });
 
     expect(c.events[0]?.type).toBe("error");
     expect(spaceOf(c)).toBeUndefined();
