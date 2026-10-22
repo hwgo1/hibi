@@ -5,6 +5,9 @@ import { join } from "node:path";
 
 import { runCommand, truncateOutput } from "../src/verify/runner";
 
+/** The running Bun as a portable stand-in for echo, false and sleep, which Windows lacks */
+const script = (code: string) => [process.execPath, "-e", code];
+
 async function inTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), "hibi-run-"));
   try {
@@ -17,7 +20,7 @@ async function inTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
 describe("runCommand", () => {
   test("captures output and exit code", async () => {
     const result = await inTempDir((cwd) =>
-      runCommand(["echo", "hello"], { cwd }),
+      runCommand(script("console.log('hello')"), { cwd }),
     );
 
     expect(result.exitCode).toBe(0);
@@ -26,7 +29,9 @@ describe("runCommand", () => {
   });
 
   test("reports a nonzero exit without throwing", async () => {
-    const result = await inTempDir((cwd) => runCommand(["false"], { cwd }));
+    const result = await inTempDir((cwd) =>
+      runCommand(script("process.exit(1)"), { cwd }),
+    );
     expect(result.exitCode).not.toBe(0);
   });
 
@@ -41,7 +46,7 @@ describe("runCommand", () => {
 
   test("kills a command that exceeds its timeout", async () => {
     const result = await inTempDir((cwd) =>
-      runCommand(["sleep", "5"], { cwd, timeoutMs: 200 }),
+      runCommand(script("await Bun.sleep(5000)"), { cwd, timeoutMs: 200 }),
     );
 
     expect(result.timedOut).toBe(true);

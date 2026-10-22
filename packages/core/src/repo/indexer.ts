@@ -1,15 +1,10 @@
-import type { Dirent } from "node:fs";
-import { readdir, stat } from "node:fs/promises";
-import { join, relative, resolve } from "node:path";
+import { stat } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 
 import { readAuthorship } from "./git";
 import { IGNORED_DIRS, isCodeFile, isGenerated, languageOf } from "./ignore";
-import {
-  MANIFEST_PARSERS,
-  manifestPath,
-  readManifest,
-  subprojectId,
-} from "./manifests";
+import { MANIFEST_PARSERS, readManifest, subprojectId } from "./manifests";
+import { toRepoPath, walkFiles, type WalkedFile } from "./walk";
 import type { FileOrigin, RepoModel, Subproject } from "../schemas/repo";
 import { REPO_MODEL_SCHEMA_VERSION } from "../schemas/repo";
 
@@ -25,12 +20,6 @@ const LIMITS = {
 const AUTHORSHIP_THRESHOLD = 10;
 
 const MAX_INDEXED_BYTES = 1024 * 1024;
-
-interface WalkedFile {
-  path: string;
-  dir: string;
-  name: string;
-}
 
 /**
  * Builds the repository model: what the project is, which parts the learner
@@ -76,41 +65,17 @@ async function walk(
   const files: WalkedFile[] = [];
   const manifests: string[] = [];
 
-  const visit = async (dir: string): Promise<void> => {
-    if (files.length >= LIMITS.filesWalked) return;
-
-    let entries: Dirent[];
-    try {
-      entries = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
+  for await (const file of walkFiles(root)) {
+    if (MANIFEST_PARSERS[file.name] !== undefined) {
+      manifests.push(file.absolute);
     }
+    if (!isCodeFile(file.name)) continue;
+    if (!(await withinSizeLimit(file.absolute))) continue;
 
-    for (const entry of entries) {
-      if (files.length >= LIMITS.filesWalked) return;
+    files.push(file);
+    if (files.length >= LIMITS.filesWalked) break;
+  }
 
-      if (entry.isDirectory()) {
-        if (IGNORED_DIRS.has(entry.name)) continue;
-        if (entry.name.startsWith(".")) continue;
-        await visit(join(dir, entry.name));
-        continue;
-      }
-
-      if (!entry.isFile()) continue;
-
-      const absolute = join(dir, entry.name);
-
-      if (MANIFEST_PARSERS[entry.name] !== undefined) {
-        manifests.push(manifestPath(dir, entry.name));
-      }
-      if (!isCodeFile(entry.name)) continue;
-      if (!(await withinSizeLimit(absolute))) continue;
-
-      files.push({ path: relative(root, absolute), dir, name: entry.name });
-    }
-  };
-
-  await visit(root);
   return { files, manifests };
 }
 
@@ -134,14 +99,13 @@ async function buildSubprojects(
   const subprojects: Subproject[] = [];
 
   for (const path of manifests.slice(0, LIMITS.subprojects)) {
-    const separator = path.lastIndexOf("/");
-    const dir = separator > 0 ? path.slice(0, separator) : root;
+    const dir = dirname(path);
     const info = await readManifest(path, dir, root);
     if (info === null) continue;
 
     subprojects.push({
       id: subprojectId(root, dir),
-      path: relative(root, dir) || ".",
+      path: toRepoPath(root, dir) || ".",
       languages: info.languages,
       languageVersion: info.languageVersion,
       entrypoints: info.entrypoints,

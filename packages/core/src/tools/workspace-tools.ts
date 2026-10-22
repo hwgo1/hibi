@@ -1,11 +1,15 @@
+import { posix } from "node:path";
 import { z } from "zod";
 
+import type { FileContent } from "../ports/workspace";
+import { isGenerated } from "../repo/ignore";
 import type { ToolContext } from "./context";
 import { completeItem, findOpenItem } from "./items";
 import { defineTool, type Tool } from "./registry";
 
 const LIST_LIMIT = 80;
 const MAX_CONTEXT_FILES = 3;
+const PAGE_CHARS = 12_000;
 
 export const listFiles: Tool<ToolContext> = defineTool({
   name: "list_files",
@@ -33,12 +37,26 @@ export const listFiles: Tool<ToolContext> = defineTool({
 
 export const readFile: Tool<ToolContext> = defineTool({
   name: "read_file",
-  description: "Read a file from the repository.",
+  description:
+    "Read a file from the repository, one page at a time. A page that does not reach the end says where to continue.",
   args: z.object({
     path: z.string().min(1).describe("Repo-relative path."),
+    startLine: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe("1-based line to start from, as given by the previous page."),
   }),
 
   async execute(args, context: ToolContext) {
+    if (isGenerated(posix.basename(args.path.replaceAll("\\", "/")))) {
+      return {
+        content: `${args.path} is machine-written (a lockfile, minified or generated code). Read the manifest or the source it comes from instead.`,
+        isError: true,
+      };
+    }
+
     const file = await context.workspace.readFile(args.path);
 
     const pinned = context.session.contextFiles.filter(
@@ -47,11 +65,43 @@ export const readFile: Tool<ToolContext> = defineTool({
     pinned.push(file.path);
     context.session.contextFiles = pinned.slice(-MAX_CONTEXT_FILES);
 
-    return {
-      content: `${file.path}${file.dirty ? " (unsaved)" : ""}\n\n${file.text}`,
-    };
+    return { content: renderPage(file, args.startLine ?? 1) };
   },
 });
+
+/**
+ * One page of a file, cut at a line boundary, with the line to resume from.
+ * A single line longer than a page is cut and marked
+ */
+export function renderPage(file: FileContent, startLine: number): string {
+  const lines = file.text.split("\n");
+  if (startLine > lines.length) {
+    return `${file.path} has ${lines.length} lines; nothing at line ${startLine}.`;
+  }
+
+  const page: string[] = [];
+  let chars = 0;
+  let next = startLine - 1;
+
+  while (next < lines.length) {
+    const line = lines[next]!;
+    if (page.length > 0 && chars + line.length + 1 > PAGE_CHARS) break;
+    page.push(
+      line.length > PAGE_CHARS
+        ? `${line.slice(0, PAGE_CHARS)} [line cut]`
+        : line,
+    );
+    chars += line.length + 1;
+    next += 1;
+  }
+
+  const header = `${file.path}${file.dirty ? " (unsaved)" : ""} · lines ${startLine}-${next} of ${lines.length}`;
+  const footer =
+    next < lines.length
+      ? `\n[continues: read_file with startLine ${next + 1}]`
+      : "";
+  return `${header}\n\n${page.join("\n")}${footer}`;
+}
 
 /** The model's verdict on an attempt. Exercises with a check are decided only by verify */
 export const recordAttempt: Tool<ToolContext> = defineTool({

@@ -1,6 +1,32 @@
 import { describe, expect, test } from "bun:test";
 
-import { isCodeFile, isGenerated, languageOf } from "../src/repo/ignore";
+import {
+  isCodeFile,
+  isGenerated,
+  isSecretFile,
+  languageOf,
+} from "../src/repo/ignore";
+
+describe("isSecretFile", () => {
+  test.each([
+    ".env",
+    ".env.local",
+    ".ENV.production",
+    "id_rsa",
+    ".npmrc",
+    "tls.key",
+    "cert.PEM",
+  ])("treats %s as a secret", (name) => {
+    expect(isSecretFile(name)).toBe(true);
+  });
+
+  test.each([".env.example", ".env.sample", "id_rsa.pub", "keys.ts", "env.go", "key"])(
+    "lets %s through",
+    (name) => {
+      expect(isSecretFile(name)).toBe(false);
+    },
+  );
+});
 
 describe("isCodeFile", () => {
   test("accepts a language this project has no parser for", () => {

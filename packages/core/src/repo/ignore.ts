@@ -32,6 +32,39 @@ export const IGNORED_DIRS = new Set([
   ".vscode",
 ]);
 
+/** Files that commonly hold credentials. Never walked, listed or read, so they never reach a provider */
+const SECRET_FILES = new Set([
+  ".npmrc",
+  ".netrc",
+  ".pypirc",
+  ".git-credentials",
+  "id_rsa",
+  "id_dsa",
+  "id_ecdsa",
+  "id_ed25519",
+]);
+
+const SECRET_EXTENSIONS = new Set(["pem", "key", "p12", "pfx", "jks", "keystore"]);
+
+/** Committed templates of an env file, which list variable names without values */
+const ENV_TEMPLATES = new Set([
+  ".env.example",
+  ".env.sample",
+  ".env.template",
+  ".env.dist",
+]);
+
+export function isSecretFile(fileName: string): boolean {
+  const lower = fileName.toLowerCase();
+  if (lower === ".env" || lower.startsWith(".env.")) {
+    return !ENV_TEMPLATES.has(lower);
+  }
+  if (SECRET_FILES.has(lower)) return true;
+
+  const extension = lower.split(".").pop() ?? "";
+  return extension !== lower && SECRET_EXTENSIONS.has(extension);
+}
+
 /** File names that are machine-written even outside an ignored directory */
 const GENERATED_FILES = new Set([
   "package-lock.json",

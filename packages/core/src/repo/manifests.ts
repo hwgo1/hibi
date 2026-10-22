@@ -1,5 +1,5 @@
 import { access, readFile } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 
 import type { TestRunner } from "../schemas/check";
 
@@ -36,7 +36,7 @@ export async function readManifest(
   dir: string,
   root: string = dir,
 ): Promise<ManifestInfo | null> {
-  const name = path.split("/").pop() ?? "";
+  const name = basename(path);
   const parse = MANIFEST_PARSERS[name];
   if (parse === undefined) return null;
 
@@ -183,12 +183,4 @@ export function subprojectId(repoRoot: string, dir: string): string {
   const rel = relative(repoRoot, dir);
   if (rel.length === 0) return "root";
   return rel.replace(/[/\\]/g, "-").toLowerCase();
-}
-
-export function manifestDir(path: string): string {
-  return dirname(path);
-}
-
-export function manifestPath(dir: string, name: string): string {
-  return join(dir, name);
 }
