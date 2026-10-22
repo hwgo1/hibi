@@ -11,7 +11,10 @@ import { joinSystem, type CompletionEvent } from "../src/ports/llm";
 import type { Workspace } from "../src/ports/workspace";
 import { buildEvidence } from "../src/schemas/evidence";
 import type { SessionState } from "../src/schemas/session";
+import { loadLearner } from "../src/session/learner-model";
+import { buildSystemPrompt } from "../src/session/prompt";
 import {
+  EDIT_WINDOW_MS,
   newSessionState,
   TutorSession,
   type TurnEvent,
@@ -246,6 +249,112 @@ describe("turn", () => {
       expect(events.filter((event) => event.type === "tool")).toHaveLength(5);
       expect(texts(events)).toBe("resumo");
     });
+  });
+});
+
+describe("recordEdit", () => {
+  function editing(): SessionState {
+    const session = newSessionState(SESSION, USER, "/tmp/repo", NOW);
+    session.items.push(
+      testItem({ targetFile: "./cmd/main.go" }),
+      testItem({
+        id: "itm2" as never,
+        targetFile: "cmd/main.go",
+        status: "done",
+      }),
+    );
+    session.activeItemId = session.items[0]!.id;
+    return session;
+  }
+
+  const later = (ms: number) => {
+    clock.at = new Date(clock.at.getTime() + ms);
+  };
+
+  test("a save of the target file is behavioral evidence with no outcome", async () => {
+    await withTutor(
+      [],
+      async ({ tutor, storage }) => {
+        expect(await tutor.recordEdit("cmd/main.go")).toBe(true);
+
+        const saved = (await storage.loadSession(SESSION))!;
+        expect(saved.items.map((item) => item.edits)).toEqual([1, 0]);
+        expect(await storage.queryEvidence({ userId: USER })).toMatchObject([
+          {
+            kind: "file_edited",
+            provenance: "behavioral",
+            outcome: "n/a",
+            filePath: "cmd/main.go",
+            conceptId: "worker-pool",
+          },
+        ]);
+      },
+      editing(),
+    );
+  });
+
+  test("saves within one window are one edit", async () => {
+    await withTutor(
+      [],
+      async ({ tutor, storage }) => {
+        await tutor.recordEdit("cmd/main.go");
+        later(EDIT_WINDOW_MS - 1);
+        expect(await tutor.recordEdit("cmd/main.go")).toBe(false);
+        later(1);
+        expect(await tutor.recordEdit("cmd/main.go")).toBe(true);
+
+        expect(tutor.session.items[0]!.edits).toBe(2);
+        expect(await storage.queryEvidence({ userId: USER })).toHaveLength(2);
+      },
+      editing(),
+    );
+  });
+
+  test("other files and finished items are not counted", async () => {
+    await withTutor(
+      [],
+      async ({ tutor, storage }) => {
+        expect(await tutor.recordEdit("cmd/other.go")).toBe(false);
+        expect(await storage.queryEvidence({ userId: USER })).toHaveLength(0);
+        expect(await storage.loadSession(SESSION)).toBeNull();
+      },
+      editing(),
+    );
+  });
+
+  test("the prompt shows the edits next to the attempts", async () => {
+    await withTutor(
+      [],
+      async ({ tutor, storage }) => {
+        await tutor.recordEdit("cmd/main.go");
+        const prompt = joinSystem(
+          await buildSystemPrompt({
+            learner: await loadLearner(storage, USER, NOW),
+            session: tutor.session,
+            registry: seedRegistry(NOW),
+            repo: null,
+            workspace,
+            now: clock.now(),
+          }),
+        );
+        expect(prompt).toContain("0 attempts · 1 edits");
+      },
+      editing(),
+    );
+  });
+
+  test("undoing a turn keeps the edits made after it", async () => {
+    await withTutor(
+      [finish],
+      async ({ tutor }) => {
+        await drain(tutor.turn("hi"));
+        await tutor.recordEdit("cmd/main.go");
+        await tutor.undo();
+
+        expect(tutor.session.items[0]!.edits).toBe(1);
+      },
+      editing(),
+    );
   });
 });
 

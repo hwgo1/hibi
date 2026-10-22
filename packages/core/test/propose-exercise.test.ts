@@ -5,25 +5,21 @@ import { buildToolRegistry, type ToolContext } from "../src/tools";
 import { testContext } from "./fixtures";
 
 const GO_REPO: RepoModel = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   repoRoot: "/tmp/repo",
   indexedAt: "2026-01-01T00:00:00.000Z",
   hasGit: true,
-  singleAuthor: true,
   subprojects: [
     {
       id: "root",
       path: ".",
       languages: ["Go"],
-      entrypoints: [],
-      dependencies: [],
       testCommand: "go test ./...",
       testRunner: "go",
     },
   ],
   fileStats: { total: 0, user: 0, external: 0, generated: 0, unknown: 0 },
   userAuthoredFiles: [],
-  ignoredPatterns: [],
   treeSummary: "",
 };
 

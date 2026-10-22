@@ -2,7 +2,7 @@ import { stat } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 import { readAuthorship } from "./git";
-import { IGNORED_DIRS, isCodeFile, isGenerated, languageOf } from "./ignore";
+import { isCodeFile, isGenerated, languageOf } from "./ignore";
 import { MANIFEST_PARSERS, readManifest, subprojectId } from "./manifests";
 import { toRepoPath, walkFiles, type WalkedFile } from "./walk";
 import type { FileOrigin, RepoModel, Subproject } from "../schemas/repo";
@@ -31,7 +31,10 @@ export async function indexRepo(
 ): Promise<RepoModel> {
   const root = resolve(repoRoot);
   const { files, manifests } = await walk(root);
-  const authorship = await readAuthorship(root);
+  const authorship = await readAuthorship(
+    root,
+    new Set(files.map((file) => file.path)),
+  );
 
   const subprojects = await buildSubprojects(root, manifests, files);
   const origins = classify(files, authorship.linesByFile, authorship.hasGit);
@@ -50,11 +53,9 @@ export async function indexRepo(
     repoRoot: root,
     indexedAt: now.toISOString(),
     hasGit: authorship.hasGit,
-    singleAuthor: authorship.singleAuthor,
     subprojects,
     fileStats: countOrigins(origins),
     userAuthoredFiles: authored,
-    ignoredPatterns: [...IGNORED_DIRS],
     treeSummary: renderTree(files),
   };
 }
@@ -108,8 +109,6 @@ async function buildSubprojects(
       path: toRepoPath(root, dir) || ".",
       languages: info.languages,
       languageVersion: info.languageVersion,
-      entrypoints: info.entrypoints,
-      dependencies: info.dependencies,
       testCommand: info.testCommand,
       testRunner: info.testRunner,
     });
@@ -122,8 +121,6 @@ async function buildSubprojects(
       id: "root",
       path: ".",
       languages: dominantLanguages(files),
-      entrypoints: [],
-      dependencies: [],
     },
   ];
 }

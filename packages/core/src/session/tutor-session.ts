@@ -1,3 +1,5 @@
+import { posix } from "node:path";
+
 import type { Concept, ConceptId, ConceptRegistry } from "../concepts";
 import { seedRegistry } from "../concepts";
 import { lookupConcept } from "../concept-resolver";
@@ -45,6 +47,8 @@ const TRANSCRIPT_WINDOW = 6;
 /** Messages kept in memory; durable state lives in the session file */
 const TRANSCRIPT_CAP = 24;
 const UNDO_DEPTH = 20;
+/** Saves closer together than this are one edit: editors write several times per save */
+export const EDIT_WINDOW_MS = 60_000;
 
 export type TurnEvent =
   | { type: "text"; text: string }
@@ -239,13 +243,14 @@ export class TutorSession {
     learner.goal = record.goal;
     await refreshLearner(storage, learner, restored, now);
 
+    const session = keepEdits(record.session, this.current);
     await Promise.all([
-      storage.saveSession(record.session),
+      storage.saveSession(session),
       storage.saveConceptRegistry(userId, restored),
       storage.saveLearnerModel(learner),
     ]);
 
-    this.current = record.session;
+    this.current = session;
     this.transcript = record.transcript;
     return {
       ok: true,
@@ -303,6 +308,55 @@ export class TutorSession {
 
   clearTranscript(): void {
     this.transcript = [];
+  }
+
+  /**
+   * Counts a save of an active item's target file. The event is behavioral
+   * with no outcome: it shows engagement and feeds the effort floor, and says
+   * nothing about whether the learner got it right. Returns whether anything
+   * was recorded
+   */
+  async recordEdit(path: string): Promise<boolean> {
+    const { storage, clock } = this.deps;
+    const now = clock.now();
+    const file = posix.normalize(path.replaceAll("\\", "/"));
+
+    const edited = this.current.items.filter(
+      (item) =>
+        item.status === "active" &&
+        item.targetFile !== undefined &&
+        posix.normalize(item.targetFile.replaceAll("\\", "/")) === file &&
+        (item.lastEditedAt === undefined ||
+          now.getTime() - Date.parse(item.lastEditedAt) >= EDIT_WINDOW_MS),
+    );
+    if (edited.length === 0) return false;
+
+    const at = now.toISOString();
+    const session = structuredClone(this.current);
+    for (const item of session.items) {
+      if (!edited.some((match) => match.id === item.id)) continue;
+      item.edits += 1;
+      item.lastEditedAt = at;
+      item.lastTouchedAt = at;
+    }
+
+    const origin = this.origin(session.turnCount, now);
+    await storage.appendEvidence(
+      edited.map((item) =>
+        buildEvidence(
+          {
+            kind: "file_edited",
+            conceptId: item.conceptId,
+            provenance: "behavioral",
+            filePath: file,
+          },
+          origin,
+        ),
+      ),
+    );
+    await storage.saveSession(session);
+    this.current = session;
+    return true;
   }
 
   private async *complete(
@@ -466,6 +520,21 @@ function restoreRegistry(
       .filter((concept) => !created.has(concept.id))
       .map((concept) => changed.get(concept.id) ?? concept),
   };
+}
+
+/** Edits happen between turns, so undoing a turn must not take them back */
+function keepEdits(
+  restored: SessionState,
+  current: SessionState,
+): SessionState {
+  const session = structuredClone(restored);
+  for (const item of session.items) {
+    const now = current.items.find((other) => other.id === item.id);
+    if (now === undefined) continue;
+    item.edits = now.edits;
+    item.lastEditedAt = now.lastEditedAt;
+  }
+  return session;
 }
 
 export function newSessionState(

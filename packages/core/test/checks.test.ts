@@ -7,7 +7,6 @@ import {
   checkFile,
   describeCheck,
   planCheck,
-  runnerOf,
 } from "../src/verify/checks";
 
 function subproject(path: string, extra: Partial<Subproject> = {}): Subproject {
@@ -15,23 +14,19 @@ function subproject(path: string, extra: Partial<Subproject> = {}): Subproject {
     id: path === "." ? "root" : path.replaceAll("/", "-"),
     path,
     languages: [],
-    entrypoints: [],
-    dependencies: [],
     ...extra,
   };
 }
 
 function repo(...subprojects: Subproject[]): RepoModel {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     repoRoot: "/repo",
     indexedAt: "2026-01-01T00:00:00.000Z",
     hasGit: true,
-    singleAuthor: true,
     subprojects,
     fileStats: { total: 0, user: 0, external: 0, generated: 0, unknown: 0 },
     userAuthoredFiles: [],
-    ignoredPatterns: [],
     treeSummary: "",
   };
 }
@@ -122,17 +117,6 @@ describe("buildCheck", () => {
       buildCheck(unknownRunner, { file: "test/cart.spec.js" }).status,
     ).toBe("unsupported");
     expect(buildCheck(null, { tests: ["TestX"] }).status).toBe("unsupported");
-  });
-});
-
-describe("runnerOf", () => {
-  test("infers the runner of repositories indexed before testRunner existed", () => {
-    expect(runnerOf(subproject(".", { testCommand: "go test ./..." }))).toBe(
-      "go",
-    );
-    expect(
-      runnerOf(subproject(".", { testCommand: "npm test" })),
-    ).toBeUndefined();
   });
 });
 

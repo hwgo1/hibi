@@ -77,7 +77,7 @@ const HELP: Record<string, HelpContent> = {
       {
         title: "Other",
         commands: [
-          { command: "/index", description: "re-read your project files" },
+          { command: "/index", description: "re-read your project now (hibi follows changes on its own)" },
           { command: "/cost", description: "what this conversation has cost" },
           { command: "/stop", description: "shut down hibi in the background" },
           { command: "/exit", description: "leave hibi" },
@@ -139,7 +139,7 @@ const HELP: Record<string, HelpContent> = {
       {
         title: "Outros",
         commands: [
-          { command: "/index", description: "relê os arquivos do seu projeto" },
+          { command: "/index", description: "relê o projeto agora (o hibi acompanha as mudanças sozinho)" },
           { command: "/cost", description: "quanto esta conversa custou" },
           { command: "/stop", description: "desliga o hibi em segundo plano" },
           { command: "/exit", description: "sai do hibi" },
@@ -201,7 +201,7 @@ const HELP: Record<string, HelpContent> = {
         commands: [
           {
             command: "/index",
-            description: "vuelve a leer los archivos de tu proyecto",
+            description: "vuelve a leer el proyecto ahora (hibi sigue los cambios solo)",
           },
           {
             command: "/cost",

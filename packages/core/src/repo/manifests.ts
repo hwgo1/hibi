@@ -6,15 +6,11 @@ import type { TestRunner } from "../schemas/check";
 export interface ManifestInfo {
   languages: string[];
   languageVersion?: string;
-  dependencies: string[];
   testCommand?: string;
   testRunner?: TestRunner;
-  entrypoints: string[];
 }
 
 type Parser = (text: string, dir: string) => ManifestInfo | null;
-
-const MAX_DEPENDENCIES = 20;
 
 const BUN_LOCKFILES = ["bun.lock", "bun.lockb"];
 
@@ -61,19 +57,12 @@ export async function readManifest(
 
 function parseGoMod(text: string): ManifestInfo {
   const version = /^go\s+(\d+\.\d+(?:\.\d+)?)/m.exec(text)?.[1];
-  const requires = [...text.matchAll(/^\s+([\w./-]+)\s+v/gm)].map(
-    (match) => match[1] ?? "",
-  );
 
   return {
     languages: ["Go"],
     languageVersion: version,
-    dependencies: requires
-      .filter((name) => name.length > 0)
-      .slice(0, MAX_DEPENDENCIES),
     testCommand: "go test ./...",
     testRunner: "go",
-    entrypoints: [],
   };
 }
 
@@ -82,7 +71,6 @@ interface PackageJson {
   devDependencies?: Record<string, string>;
   scripts?: Record<string, string>;
   engines?: { node?: string };
-  main?: string;
 }
 
 function parsePackageJson(text: string): ManifestInfo | null {
@@ -98,10 +86,8 @@ function parsePackageJson(text: string): ManifestInfo | null {
   return {
     languages: hasTypeScript ? ["TypeScript"] : ["JavaScript"],
     languageVersion: json.engines?.node,
-    dependencies: dependencies.slice(0, MAX_DEPENDENCIES),
     testCommand: testScript === undefined ? undefined : "npm test",
     testRunner: jsTestRunner(testScript, dependencies),
-    entrypoints: json.main === undefined ? [] : [json.main],
   };
 }
 
@@ -124,39 +110,23 @@ function jsTestRunner(
 
 function parseCargoToml(text: string): ManifestInfo {
   const version = /^edition\s*=\s*"(\d+)"/m.exec(text)?.[1];
-  const section = /\[dependencies\]([\s\S]*?)(\n\[|$)/.exec(text)?.[1] ?? "";
-  const names = [...section.matchAll(/^([\w-]+)\s*=/gm)].map(
-    (match) => match[1] ?? "",
-  );
 
   return {
     languages: ["Rust"],
     languageVersion: version === undefined ? undefined : `edition ${version}`,
-    dependencies: names
-      .filter((name) => name.length > 0)
-      .slice(0, MAX_DEPENDENCIES),
     testCommand: "cargo test",
     testRunner: "cargo",
-    entrypoints: [],
   };
 }
 
 function parsePyproject(text: string): ManifestInfo {
   const version = /requires-python\s*=\s*"([^"]+)"/.exec(text)?.[1];
-  const section = /dependencies\s*=\s*\[([\s\S]*?)\]/.exec(text)?.[1] ?? "";
-  const names = [...section.matchAll(/"([\w-]+)/g)].map(
-    (match) => match[1] ?? "",
-  );
 
   return {
     languages: ["Python"],
     languageVersion: version,
-    dependencies: names
-      .filter((name) => name.length > 0)
-      .slice(0, MAX_DEPENDENCIES),
     testCommand: "pytest",
     testRunner: "pytest",
-    entrypoints: [],
   };
 }
 

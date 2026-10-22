@@ -26,8 +26,6 @@ export const SubprojectSchema = z.object({
    * so the tutor is told which version is actually in use.
    */
   languageVersion: z.string().min(1).optional(),
-  entrypoints: z.array(z.string().min(1)).default([]),
-  dependencies: z.array(z.string().min(1)).default([]),
   testCommand: z.string().min(1).optional(),
   /** Runner hibi drives to run single tests. Absent when it cannot select them */
   testRunner: TestRunnerSchema.optional(),
@@ -43,7 +41,11 @@ export const FileStatsSchema = z.object({
   unknown: z.number().int().nonnegative(),
 });
 
-export const REPO_MODEL_SCHEMA_VERSION = 1;
+/**
+ * Changes whenever the indexer's output changes. A model written by another
+ * version is discarded and the repository indexed again, never translated
+ */
+export const REPO_MODEL_SCHEMA_VERSION = 2;
 
 export const RepoModelSchema = z.object({
   schemaVersion: z.literal(REPO_MODEL_SCHEMA_VERSION),
@@ -51,11 +53,9 @@ export const RepoModelSchema = z.object({
   indexedAt: IsoDateTimeSchema,
   /** Without git, authorship is undeterminable and origin degrades to unknown */
   hasGit: z.boolean(),
-  singleAuthor: z.boolean().default(false),
   subprojects: z.array(SubprojectSchema).min(1),
   fileStats: FileStatsSchema,
   userAuthoredFiles: z.array(z.string().min(1)).default([]),
-  ignoredPatterns: z.array(z.string().min(1)).default([]),
   treeSummary: z.string().default(""),
 });
 

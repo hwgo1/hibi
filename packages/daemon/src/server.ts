@@ -39,6 +39,7 @@ export async function serve(daemon: Daemon, home: string): Promise<void> {
     },
     async stop(beforeExit) {
       await Promise.allSettled([...inflight]);
+      await daemon.close();
       await beforeExit?.();
       await releaseLock(lockPath);
       if (!WINDOWS) await rm(path, { force: true });

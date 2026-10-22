@@ -29,7 +29,14 @@ beforeEach(async () => {
   await mkdir(repo);
 });
 
+const running: Daemon[] = [];
+function track(daemon: Daemon): Daemon {
+  running.push(daemon);
+  return daemon;
+}
+
 afterEach(async () => {
+  await Promise.all(running.splice(0).map((daemon) => daemon.close()));
   for (const [key, value] of savedEnv) {
     if (value === undefined) delete process.env[key];
     else process.env[key] = value;
@@ -59,7 +66,7 @@ async function settings(daemon: Daemon): Promise<Settings> {
 
 describe("Account", () => {
   test("a fresh home has no profile and no provider", async () => {
-    expect(await settings(new Daemon({ home }))).toMatchObject({
+    expect(await settings(track(new Daemon({ home })))).toMatchObject({
       profile: null,
       provider: null,
       model: null,
@@ -68,7 +75,7 @@ describe("Account", () => {
   });
 
   test("a message before a key is set up says so instead of failing silently", async () => {
-    const daemon = new Daemon({ home });
+    const daemon = track(new Daemon({ home }));
     await call(daemon, { type: "open_space", root: repo });
     await call(daemon, { type: "set_profile", language: "pt-BR", name: "Hugo" });
 
@@ -83,7 +90,7 @@ describe("Account", () => {
   });
 
   test("the profile keeps a canonical language and refuses a stray word", async () => {
-    const daemon = new Daemon({ home });
+    const daemon = track(new Daemon({ home }));
 
     const refused = await call(daemon, {
       type: "set_profile",
@@ -101,7 +108,7 @@ describe("Account", () => {
   });
 
   test("switching model or provider without a saved key is refused", async () => {
-    const daemon = new Daemon({ home });
+    const daemon = track(new Daemon({ home }));
 
     expect((await call(daemon, { type: "set_model", model: "x" }))[0]).toMatchObject({
       type: "error",
@@ -119,7 +126,7 @@ describe("Account", () => {
       apiKey: "sk-b",
       model: "claude-sonnet-4-6",
     });
-    const daemon = new Daemon({ home });
+    const daemon = track(new Daemon({ home }));
 
     expect(await settings(daemon)).toMatchObject({
       provider: "anthropic",
@@ -198,7 +205,7 @@ describe("ActiveProvider", () => {
 
 describe("storage without locks", () => {
   test("writes leave no lock files behind", async () => {
-    const daemon = new Daemon({ home });
+    const daemon = track(new Daemon({ home }));
     await call(daemon, { type: "set_profile", language: "en", name: "" });
 
     const storage = new StorageLocal(home);

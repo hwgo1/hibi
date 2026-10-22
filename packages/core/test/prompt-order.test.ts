@@ -164,18 +164,16 @@ describe("learner and repo sections", () => {
       session: session(),
       registry: seedRegistry(NOW),
       repo: {
-        schemaVersion: 1,
+        schemaVersion: 2,
         repoRoot: "/tmp/repo",
         indexedAt: NOW.toISOString(),
         hasGit: true,
-        singleAuthor: true,
         subprojects: [
           {
             id: "root",
             path: ".",
             languages: ["Go"],
-            entrypoints: [],
-            dependencies: [],
+            languageVersion: "1.22",
           },
         ],
         fileStats: {
@@ -186,7 +184,6 @@ describe("learner and repo sections", () => {
           unknown: 0,
         },
         userAuthoredFiles: files,
-        ignoredPatterns: [],
         treeSummary: "",
       },
       workspace,
@@ -196,5 +193,6 @@ describe("learner and repo sections", () => {
     expect(prompt).toContain("written by the user: src/f0.go");
     expect(prompt).toContain("src/f14.go (+3 more)");
     expect(prompt).not.toContain("src/f15.go");
+    expect(prompt).toContain("  .: Go 1.22");
   });
 });

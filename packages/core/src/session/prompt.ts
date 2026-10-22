@@ -259,7 +259,9 @@ function describeItem(
       ? " STALE — ask once if this was finished or dropped"
       : "";
 
-  return `${marker}${item.id} exercise ${item.conceptId}: ${item.statement}${check} · ${item.attempts} attempts${ladder}${prediction}${stale}`;
+  const edits = item.edits > 0 ? ` · ${item.edits} edits` : "";
+
+  return `${marker}${item.id} exercise ${item.conceptId}: ${item.statement}${check} · ${item.attempts} attempts${edits}${ladder}${prediction}${stale}`;
 }
 
 function renderRepo(repo: RepoModel | null): string {
@@ -269,6 +271,7 @@ function renderRepo(repo: RepoModel | null): string {
   for (const sub of repo.subprojects) {
     lines.push(
       `  ${sub.path}: ${sub.languages.join(", ")}` +
+        (sub.languageVersion !== undefined ? ` ${sub.languageVersion}` : ``) +
         (sub.testCommand !== undefined ? ` · tests: ${sub.testCommand}` : ``),
     );
   }

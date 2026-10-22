@@ -151,10 +151,17 @@ export class StorageLocal implements Storage {
     await this.indexSession(state.sessionId, state.repoRoot);
   }
 
+  /** The model is derived from the folder: one this indexer version cannot read is rebuilt instead */
   async loadRepoModel(repoRoot: string): Promise<RepoModel | null> {
-    return readJson(join(this.repoDir(repoRoot), "repo.json"), (raw) =>
-      RepoModelSchema.parse(raw),
-    );
+    try {
+      return await readJson(join(this.repoDir(repoRoot), "repo.json"), (raw) => {
+        const parsed = RepoModelSchema.safeParse(raw);
+        return parsed.success ? parsed.data : null;
+      });
+    } catch (error) {
+      if (error instanceof SyntaxError) return null;
+      throw error;
+    }
   }
 
   async saveRepoModel(model: RepoModel): Promise<void> {

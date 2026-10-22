@@ -318,7 +318,7 @@ export const pt: Dictionary = {
             ],
             [
               "/index",
-              "Lê os arquivos do projeto de novo depois de mudanças grandes",
+              "Relê o projeto agora; o hibi já acompanha suas mudanças",
             ],
             ["/cost", "Quanto a conversa custou até agora"],
             [

@@ -29,11 +29,13 @@ export const ESCALATION = {
 /**
  * Minimum real effort before the first hint. A hint received before the
  * learner has engaged does not stick, and without a floor the ladder degrades
- * into autocomplete with extra steps
+ * into autocomplete with extra steps. Editing the exercise file is engagement
+ * even before anything is submitted
  */
 export const EFFORT_FLOOR = {
   minimumMs: 3 * 60 * 1000,
   orAfterAttempts: 1,
+  orAfterEdits: 2,
 } as const;
 
 export interface EffortInput {
@@ -48,6 +50,7 @@ export function effortFloorMet(input: EffortInput): EffortCheck {
 
   if ((item.ladder?.hintsGiven ?? 0) > 0) return { met: true };
   if (item.attempts >= EFFORT_FLOOR.orAfterAttempts) return { met: true };
+  if (item.edits >= EFFORT_FLOOR.orAfterEdits) return { met: true };
 
   const elapsed = clock.now().getTime() - Date.parse(item.createdAt);
   if (elapsed >= EFFORT_FLOOR.minimumMs) return { met: true };

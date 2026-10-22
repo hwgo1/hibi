@@ -121,4 +121,34 @@ describe("StorageLocal", () => {
       expect(await storage.loadSession(session.sessionId)).toBeNull();
     });
   });
+
+  test("a repo model from another indexer version reads as missing, so it is rebuilt", async () => {
+    await withTempStorage(async (storage, dir) => {
+      const model = {
+        schemaVersion: 2 as const,
+        repoRoot: "/tmp/repo",
+        indexedAt: "2026-01-01T00:00:00.000Z",
+        hasGit: false,
+        subprojects: [{ id: "root", path: ".", languages: ["Go"] }],
+        fileStats: { total: 0, user: 0, external: 0, generated: 0, unknown: 0 },
+        userAuthoredFiles: [],
+        treeSummary: "",
+      };
+      await storage.saveRepoModel(model);
+      expect(await storage.loadRepoModel("/tmp/repo")).toEqual(model);
+
+      const [path] = await Array.fromAsync(
+        new Bun.Glob("**/repo.json").scan({ cwd: dir, absolute: true }),
+      );
+      await writeFile(
+        path!,
+        JSON.stringify({ ...model, schemaVersion: 1, singleAuthor: true }),
+      );
+
+      expect(await storage.loadRepoModel("/tmp/repo")).toBeNull();
+
+      await writeFile(path!, "{");
+      expect(await storage.loadRepoModel("/tmp/repo")).toBeNull();
+    });
+  });
 });

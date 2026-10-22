@@ -1,16 +1,21 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, parse } from "node:path";
 
 import {
   FakeProvider,
+  newSessionState,
   StorageLocal,
   type CompletionEvent,
+  type ConceptId,
+  type ItemId,
   type SessionId,
+  type SessionState,
+  type UserId,
 } from "@hibi/core";
 
-import { Daemon, type Client, type DaemonRequest } from "../src/daemon";
+import { Daemon, repoKey, type Client, type DaemonRequest } from "../src/daemon";
 import type { RequestBody, ServerEvent } from "../src/protocol";
 
 interface TestClient extends Client {
@@ -61,12 +66,17 @@ beforeEach(async () => {
   await Promise.all([mkdir(repoA), mkdir(repoB)]);
 });
 
+const running: Daemon[] = [];
+
 afterEach(async () => {
+  await Promise.all(running.splice(0).map((d) => d.close()));
   await rm(base, { recursive: true, force: true });
 });
 
 function daemon(...script: CompletionEvent[][]): Daemon {
-  return new Daemon({ provider: new FakeProvider(script), home });
+  const d = new Daemon({ provider: new FakeProvider(script), home });
+  running.push(d);
+  return d;
 }
 
 describe("Daemon requests", () => {
@@ -212,5 +222,86 @@ describe("Daemon refusals", () => {
 
     expect(c.events[0]?.type).toBe("error");
     expect(spaceOf(c)).toBeUndefined();
+  });
+});
+
+describe("Daemon watching", () => {
+  const timing = { structureMs: 40, editMs: 40, quietMs: 5_000 };
+
+  function watched(): Daemon {
+    const d = new Daemon({
+      provider: new FakeProvider([]),
+      home,
+      watch: { timing },
+    });
+    running.push(d);
+    return d;
+  }
+
+  async function until<T>(read: () => Promise<T>, ok: (value: T) => boolean): Promise<T> {
+    const deadline = Date.now() + 3000;
+    for (;;) {
+      const value = await read();
+      if (ok(value)) return value;
+      if (Date.now() > deadline) throw new Error("timed out");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
+
+  test("go mod init in an empty folder reaches the model without /index", async () => {
+    const root = await realpath(repoA);
+    const d = watched();
+    await send(d, client(), { type: "open_space", root });
+
+    const storage = new StorageLocal(home);
+    expect((await storage.loadRepoModel(root))?.subprojects[0]?.languages).toEqual([]);
+
+    await writeFile(join(root, "go.mod"), "module example.com/chat\n\ngo 1.24\n");
+
+    const model = await until(
+      () => storage.loadRepoModel(root),
+      (model) => model?.subprojects[0]?.languages[0] === "Go",
+    );
+    expect(model?.subprojects[0]?.languageVersion).toBe("1.24");
+  });
+
+  test("saving the exercise file counts toward the effort floor", async () => {
+    const root = await realpath(repoA);
+    const id = repoKey(root) as SessionId;
+    const session = newSessionState(id, "local" as UserId, root, new Date());
+    const at = new Date().toISOString();
+    session.items.push({
+      id: "itm1" as ItemId,
+      kind: "exercise",
+      conceptId: "goroutines" as ConceptId,
+      statement: "start a goroutine",
+      targetFile: "main.go",
+      attempts: 0,
+      edits: 0,
+      createdAt: at,
+      lastTouchedAt: at,
+      status: "active",
+    });
+    session.activeItemId = "itm1" as ItemId;
+    await new StorageLocal(home).saveSession(session);
+
+    const d = watched();
+    const c = client();
+    await send(d, c, { type: "open_space", root });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    await writeFile(join(root, "main.go"), "package main\n");
+
+    const edits = await until(
+      async () => {
+        const state = await send(d, c, { type: "state" });
+        const event = of(c, state)[0];
+        return event?.type === "state"
+          ? (event.payload as SessionState).items[0]?.edits
+          : 0;
+      },
+      (count) => count === 1,
+    );
+    expect(edits).toBe(1);
   });
 });

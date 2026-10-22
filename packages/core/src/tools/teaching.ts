@@ -165,6 +165,7 @@ export const proposeExercise: Tool<ToolContext> = defineTool({
       targetFile: args.targetFile,
       check,
       attempts: 0,
+      edits: 0,
       createdAt: at,
       lastTouchedAt: at,
       status: "active",

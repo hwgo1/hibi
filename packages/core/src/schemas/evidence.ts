@@ -23,6 +23,7 @@ export const EVIDENCE_KINDS = [
   "hint_given",
   "audit_finding",
   "test_run",
+  "file_edited",
   "external_code_detected",
   "item_abandoned",
   "mastery_disputed",

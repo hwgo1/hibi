@@ -43,4 +43,12 @@ describe("effortFloorMet", () => {
     });
     expect(effortFloorMet({ item, clock }).met).toBe(true);
   });
+
+  test("saving the exercise file counts as engaging with it", () => {
+    const once = testItem({ edits: EFFORT_FLOOR.orAfterEdits - 1 });
+    const enough = testItem({ edits: EFFORT_FLOOR.orAfterEdits });
+
+    expect(effortFloorMet({ item: once, clock }).met).toBe(false);
+    expect(effortFloorMet({ item: enough, clock }).met).toBe(true);
+  });
 });

@@ -176,7 +176,6 @@ describe("indexRepo", () => {
     );
 
     expect(model.hasGit).toBe(false);
-    expect(model.singleAuthor).toBe(false);
     expect(model.fileStats.unknown).toBe(1);
     expect(model.userAuthoredFiles).toHaveLength(0);
   });

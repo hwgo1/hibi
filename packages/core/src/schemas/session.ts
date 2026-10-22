@@ -86,6 +86,9 @@ export const WorkItemSchema = z.object({
   /** Absent when no test can decide the item */
   check: CheckSchema.optional(),
   attempts: z.number().int().nonnegative().default(0),
+  /** Saves of `targetFile` seen by the watcher, at most one per `EDIT_WINDOW_MS` */
+  edits: z.number().int().nonnegative().default(0),
+  lastEditedAt: IsoDateTimeSchema.optional(),
   ladder: LadderSchema.optional(),
   /** Consumed by the next verify */
   prediction: PredictionSchema.optional(),

@@ -21,7 +21,7 @@ async function withFile<T>(
 }
 
 describe("readManifest", () => {
-  test("reads the Go version and requirements", async () => {
+  test("reads the Go version", async () => {
     const info = await withFile(
       "go.mod",
       "module example.com/app\n\ngo 1.22\n\nrequire (\n\tgithub.com/x/y v1.2.3\n)\n",
@@ -29,7 +29,6 @@ describe("readManifest", () => {
     );
 
     expect(info?.languageVersion).toBe("1.22");
-    expect(info?.dependencies).toContain("github.com/x/y");
     expect(info?.testCommand).toBe("go test ./...");
   });
 
@@ -58,7 +57,7 @@ describe("readManifest", () => {
     expect(info?.testCommand).toBeUndefined();
   });
 
-  test("reads the Rust edition and dependencies", async () => {
+  test("reads the Rust edition", async () => {
     const info = await withFile(
       "Cargo.toml",
       '[package]\nname = "app"\nedition = "2021"\n\n[dependencies]\nserde = "1.0"\ntokio = { version = "1" }\n',
@@ -66,7 +65,6 @@ describe("readManifest", () => {
     );
 
     expect(info?.languageVersion).toBe("edition 2021");
-    expect(info?.dependencies).toContain("serde");
   });
 
   test("reads the Python version requirement", async () => {
@@ -77,7 +75,6 @@ describe("readManifest", () => {
     );
 
     expect(info?.languageVersion).toBe(">=3.11");
-    expect(info?.dependencies).toContain("httpx");
   });
 
   test("returns null for a malformed manifest instead of throwing", async () => {

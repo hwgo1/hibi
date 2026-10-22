@@ -257,7 +257,7 @@ export const en: Dictionary = {
           mono: [true, false],
           rows: [
             ["/help", "Examples of what to ask. `/help all` lists every command"],
-            ["/index", "Re-reads your project's files after big changes"],
+            ["/index", "Re-reads the project now; hibi already follows your changes"],
             ["/cost", "How much this conversation has cost so far"],
             ["/stop", "Shuts down hibi's background process"],
             ["/exit", "Leaves hibi"]

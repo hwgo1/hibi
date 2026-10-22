@@ -1,25 +1,12 @@
 import { posix } from "node:path";
 
-import type { Check, TestRunner } from "../schemas/check";
+import type { Check } from "../schemas/check";
 import type { RepoModel, Subproject } from "../schemas/repo";
 import { TEST_RUNNER_SPECS } from "./test-runners";
 
 const MAX_CHECK_TESTS = 10;
 
 const MAX_TEST_NAME_LENGTH = 200;
-
-// shortcut: maps repo.json indexed before testRunner existed; drop once indexerVersion forces a reindex (C6)
-const LEGACY_RUNNERS: Record<string, TestRunner> = {
-  "go test ./...": "go",
-  "cargo test": "cargo",
-  pytest: "pytest",
-};
-
-export function runnerOf(subproject: Subproject): TestRunner | undefined {
-  if (subproject.testRunner !== undefined) return subproject.testRunner;
-  if (subproject.testCommand === undefined) return undefined;
-  return LEGACY_RUNNERS[subproject.testCommand];
-}
 
 /** `file` is relative to the repository root */
 export interface CheckRequest {
@@ -59,7 +46,7 @@ export function buildCheck(
     return { status: "invalid", reason: subproject };
   }
 
-  const runner = runnerOf(subproject);
+  const runner = subproject.testRunner;
   if (runner === undefined) {
     return {
       status: "unsupported",
@@ -162,7 +149,7 @@ function pickSubproject(
   }
 
   const testable = repo.subprojects.filter(
-    (subproject) => runnerOf(subproject) !== undefined,
+    (subproject) => subproject.testRunner !== undefined,
   );
   const only =
     testable.length === 1

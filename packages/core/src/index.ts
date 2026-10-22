@@ -31,6 +31,7 @@ export * from "./repo/indexer";
 export * from "./repo/git";
 export * from "./repo/ignore";
 export * from "./repo/manifests";
+export * from "./repo/walk";
 export * from "./schemas/elicitation";
 export * from "./elicitation/policy";
 export * from "./elicitation/calibration";

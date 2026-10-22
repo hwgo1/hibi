@@ -14,6 +14,7 @@ import {
   type Clock,
   type CommandOutcome,
   type LLMProvider,
+  type RepoModel,
   type SessionId,
 } from "@hibi/core";
 
@@ -25,6 +26,7 @@ import {
 } from "./account";
 import type { ClientRequest, Reply, ServerEvent } from "./protocol";
 import { TurnQueue } from "./turn-queue";
+import { watchSpace, type SpaceWatcher, type WatchTiming } from "./watcher";
 
 /** One attached connection, as the daemon sees it */
 export interface Client {
@@ -42,6 +44,8 @@ export interface DaemonOptions {
   provider?: LLMProvider;
   home?: string;
   clock?: Clock;
+  /** `false` leaves spaces unwatched; `poll` forces the fallback */
+  watch?: false | { poll?: boolean; timing?: Partial<WatchTiming> };
 }
 
 interface Space {
@@ -49,6 +53,11 @@ interface Space {
   root: string;
   tutor: TutorSession;
   clients: Set<Client>;
+  watcher: SpaceWatcher | null;
+  /** The index run in progress or last finished. Runs are chained, never concurrent */
+  indexing: Promise<unknown>;
+  /** A run waiting behind the current one, which later requests join instead of queueing their own */
+  queued: Promise<RepoModel> | null;
 }
 
 const NO_SPACE: Reply = {
@@ -73,10 +82,13 @@ export class Daemon {
   private readonly clock: Clock;
   private readonly spaces = new Map<string, Promise<Space>>();
   private readonly attached = new Map<Client, Space>();
+  private readonly watch: DaemonOptions["watch"];
+  private closed = false;
 
   constructor(options: DaemonOptions = {}) {
     const home = options.home ?? join(homedir(), ".hibi");
     this.clock = options.clock ?? systemClock;
+    this.watch = options.watch;
     this.storage = new StorageLocal(home);
     this.account = new Account({
       storage: this.storage,
@@ -116,6 +128,17 @@ export class Daemon {
     this.answer(client, request.id, replies);
   }
 
+  /** Stops every watcher and waits for index runs in flight, so nothing writes after it resolves */
+  async close(): Promise<void> {
+    this.closed = true;
+    const spaces = await Promise.allSettled(this.spaces.values());
+    for (const space of spaces) {
+      if (space.status !== "fulfilled") continue;
+      space.value.watcher?.close();
+      await space.value.indexing.catch(() => null);
+    }
+  }
+
   /** Stops routing events to a connection that went away */
   detach(client: Client): void {
     this.attached.get(client)?.clients.delete(client);
@@ -153,7 +176,7 @@ export class Daemon {
         });
 
       case "reindex":
-        return this.queue.run(() => this.reindex(space.root));
+        return this.reindexReply(space);
     }
   }
 
@@ -198,23 +221,57 @@ export class Daemon {
       session,
     );
 
-    await this.ensureIndexed(root);
-    return { id, root, tutor, clients: new Set() };
+    const space: Space = {
+      id,
+      root,
+      tutor,
+      clients: new Set(),
+      watcher: null,
+      indexing: Promise.resolve(),
+      queued: null,
+    };
+
+    // Only a root never indexed waits, so the first turn has a map. Any other
+    // opens at once and catches up on what changed while hibi was not running
+    const indexed = this.reindex(space).catch(() => null);
+    if ((await this.storage.loadRepoModel(root)) === null) await indexed;
+
+    if (this.watch !== false && !this.closed) {
+      space.watcher = watchSpace(
+        root,
+        {
+          reindex: () => void this.reindex(space).catch(() => null),
+          edited: (path) =>
+            void this.queue
+              .run(() => space.tutor.recordEdit(path))
+              .catch(() => false),
+        },
+        this.watch,
+      );
+    }
+    return space;
   }
 
   /**
-   * Indexes a root that has no model yet, so a first run needs no separate
-   * command. Failure is not fatal: the tutor can still read files, it just
-   * starts without a map.
+   * Indexes the space after any run already going, outside the turn queue: a
+   * turn reads whichever model was saved last. A failure keeps the previous
+   * model, or none, and the prompt then omits the <repo> block
    */
-  private async ensureIndexed(root: string): Promise<void> {
-    if ((await this.storage.loadRepoModel(root)) !== null) return;
+  private reindex(space: Space): Promise<RepoModel> {
+    if (space.queued !== null) return space.queued;
 
-    try {
-      await this.storage.saveRepoModel(await indexRepo(root, this.clock.now()));
-    } catch {
-      // leaves the repo model null; the prompt omits the <repo> block
-    }
+    const run = space.indexing
+      .catch(() => null)
+      .then(async () => {
+        space.queued = null;
+        const model = await indexRepo(space.root, this.clock.now());
+        await this.storage.saveRepoModel(model);
+        return model;
+      });
+
+    space.queued = run;
+    space.indexing = run;
+    return run;
   }
 
   /** Runs a state-changing command in turn order, so it never interleaves with a turn */
@@ -223,10 +280,9 @@ export class Daemon {
     return [{ type: result.ok ? "ok" : "error", message: result.message }];
   }
 
-  private async reindex(root: string): Promise<Reply[]> {
+  private async reindexReply(space: Space): Promise<Reply[]> {
     try {
-      const model = await indexRepo(root, this.clock.now());
-      await this.storage.saveRepoModel(model);
+      const model = await this.reindex(space);
       return [
         {
           type: "ok",

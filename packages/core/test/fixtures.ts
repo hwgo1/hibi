@@ -74,6 +74,7 @@ export function testItem(
     conceptId: "worker-pool" as ConceptId,
     statement: "build a worker pool",
     attempts: 0,
+    edits: 0,
     createdAt: at,
     lastTouchedAt: at,
     status: "active",

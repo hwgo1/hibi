@@ -1,69 +1,79 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+
 const NUMSTAT_COMMIT_LIMIT = 2000;
 const GIT_TIMEOUT_MS = 30_000;
 
-/** Lines the user added per file, and how concentrated authorship is overall */
+/** Lines the user wrote per file, committed or not */
 export interface AuthorshipReport {
   hasGit: boolean;
-  singleAuthor: boolean;
   /** Repo-relative path to lines added by the current user */
   linesByFile: Map<string, number>;
 }
 
-const EMPTY: AuthorshipReport = {
-  hasGit: false,
-  singleAuthor: false,
-  linesByFile: new Map(),
-};
+const EMPTY: AuthorshipReport = { hasGit: false, linesByFile: new Map() };
 
 /**
- * Attributes authorship from the commit history.
+ * Attributes authorship from the commit history and the working tree.
+ *
+ * Whatever is not committed yet was written on this machine, so it counts as
+ * the user's: staged and unstaged changes, and untracked files among
+ * `candidates`, the repo-relative paths the walk kept. Paths are relative to
+ * `repoRoot` even when it sits inside a larger repository.
  *
  * Returns an empty report when the directory is not a repository or git is
  * unavailable, which degrades hibi calibration without breaking it
  */
 export async function readAuthorship(
   repoRoot: string,
+  candidates: ReadonlySet<string>,
 ): Promise<AuthorshipReport> {
-  const email = await gitOutput(repoRoot, ["config", "user.email"]);
-  if (email === null) return EMPTY;
+  const inside = await gitOutput(repoRoot, ["rev-parse", "--is-inside-work-tree"]);
+  if (inside?.trim() !== "true") return EMPTY;
 
-  const authors = await gitOutput(repoRoot, [
-    "log",
-    `--max-count=${NUMSTAT_COMMIT_LIMIT}`,
-    "--format=%ae",
-  ]);
-  if (authors === null) return EMPTY;
+  const linesByFile = new Map<string, number>();
+  const add = (path: string, lines: number) =>
+    linesByFile.set(path, (linesByFile.get(path) ?? 0) + lines);
 
-  const log = await gitOutput(repoRoot, [
-    "log",
-    `--max-count=${NUMSTAT_COMMIT_LIMIT}`,
-    "--numstat",
-    "--format=%x00%ae",
-    "--no-renames",
-  ]);
-  if (log === null) return EMPTY;
-
-  const me = email.trim().toLowerCase();
-  return {
-    hasGit: true,
-    singleAuthor: isSingleAuthor(authors),
-    linesByFile: parseNumstat(log, me),
-  };
-}
-
-function isSingleAuthor(log: string): boolean {
-  const counts = new Map<string, number>();
-
-  for (const line of log.split("\n")) {
-    const author = line.trim().toLowerCase();
-    if (author.length === 0) continue;
-    counts.set(author, (counts.get(author) ?? 0) + 1);
+  const email = (await gitOutput(repoRoot, ["config", "user.email"]))
+    ?.trim()
+    .toLowerCase();
+  if (email !== undefined && email.length > 0) {
+    // A repository without commits makes `log` fail: nothing is committed yet
+    const log = await gitOutput(repoRoot, [
+      "log",
+      `--max-count=${NUMSTAT_COMMIT_LIMIT}`,
+      "--numstat",
+      "--relative",
+      "--no-renames",
+      "--format=%x00%ae",
+    ]);
+    for (const [path, lines] of parseLog(log ?? "", email)) add(path, lines);
   }
 
-  const total = [...counts.values()].reduce((sum, count) => sum + count, 0);
-  if (total === 0) return false;
+  for (const staged of [["--cached"], []]) {
+    const diff = await gitOutput(repoRoot, [
+      "diff",
+      ...staged,
+      "--numstat",
+      "--relative",
+      "--no-renames",
+    ]);
+    for (const [path, lines] of parseNumstat(diff ?? "")) add(path, lines);
+  }
 
-  return Math.max(...counts.values()) / total >= 0.9;
+  const untracked = await gitOutput(repoRoot, [
+    "ls-files",
+    "--others",
+    "--exclude-standard",
+    "-z",
+  ]);
+  for (const path of (untracked ?? "").split("\u0000")) {
+    if (!candidates.has(path)) continue;
+    add(path, await countLines(join(repoRoot, path)));
+  }
+
+  return { hasGit: true, linesByFile };
 }
 
 /**
@@ -75,27 +85,45 @@ function isSingleAuthor(log: string): boolean {
  * lines. Distinguishing written from pasted code needs direct observation of
  * editing, not inference from history
  */
-function parseNumstat(log: string, me: string): Map<string, number> {
-  const linesByFile = new Map<string, number>();
+function parseLog(log: string, me: string): [string, number][] {
+  const entries: [string, number][] = [];
 
   for (const chunk of log.split("\u0000")) {
-    const lines = chunk.split("\n");
-    const author = lines.shift()?.trim().toLowerCase() ?? "";
-    if (author !== me) continue;
-
-    for (const line of lines) {
-      const parts = line.split("\t");
-      if (parts.length !== 3) continue;
-
-      const added = Number.parseInt(parts[0] ?? "", 10);
-      const path = parts[2] ?? "";
-      if (Number.isNaN(added) || path.length === 0) continue;
-
-      linesByFile.set(path, (linesByFile.get(path) ?? 0) + added);
-    }
+    const newline = chunk.indexOf("\n");
+    if (newline === -1) continue;
+    if (chunk.slice(0, newline).trim().toLowerCase() !== me) continue;
+    entries.push(...parseNumstat(chunk.slice(newline + 1)));
   }
 
-  return linesByFile;
+  return entries;
+}
+
+/** Binary files report `-` and are skipped */
+function parseNumstat(text: string): [string, number][] {
+  const entries: [string, number][] = [];
+
+  for (const line of text.split("\n")) {
+    const parts = line.split("\t");
+    if (parts.length !== 3) continue;
+
+    const added = Number.parseInt(parts[0] ?? "", 10);
+    const path = parts[2] ?? "";
+    if (Number.isNaN(added) || path.length === 0) continue;
+    entries.push([path, added]);
+  }
+
+  return entries;
+}
+
+async function countLines(path: string): Promise<number> {
+  try {
+    const text = await readFile(path, "utf8");
+    if (text.length === 0) return 0;
+    const breaks = text.split("\n").length - 1;
+    return text.endsWith("\n") ? breaks : breaks + 1;
+  } catch {
+    return 0;
+  }
 }
 
 async function gitOutput(cwd: string, args: string[]): Promise<string | null> {
