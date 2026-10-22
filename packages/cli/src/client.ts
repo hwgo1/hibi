@@ -63,6 +63,20 @@ export class DaemonClient {
     });
   }
 
+  /** Attaches this connection to the space rooted at `root`. Resolves with the daemon's refusal, or null once attached */
+  async openSpace(root: string): Promise<string | null> {
+    let refusal: string | null = null;
+    const previous = this.takeHandler();
+
+    this.onEvent((event) => {
+      if (event.type === "error") refusal = event.message;
+    });
+    await this.sendAndWait({ type: "open_space", root });
+
+    this.handler = previous;
+    return refusal;
+  }
+
   close(): void {
     this.socket?.end();
   }

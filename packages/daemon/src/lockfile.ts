@@ -1,7 +1,7 @@
 import { mkdir, open, readFile, rm } from "node:fs/promises";
 import { dirname } from "node:path";
 
-/** Ensures one daemon per repository. `wx` fails when the file exists, making creation an atomic test-and-set */
+/** Ensures one daemon per user. `wx` fails when the file exists, making creation an atomic test-and-set */
 export async function acquireLock(path: string): Promise<boolean> {
   await mkdir(dirname(path), { recursive: true });
 

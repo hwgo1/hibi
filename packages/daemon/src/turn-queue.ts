@@ -1,7 +1,8 @@
 /**
- * Serializes turns within a session. Two clients attached to the same daemon
- * would otherwise read the same state, apply divergent changes, and have the
- * later write erase the earlier one.
+ * Serializes every state-changing request in the daemon. Spaces share the
+ * learner model, the concept registry and the evidence log, so two turns
+ * running at once would read the same state and the later write would erase
+ * the earlier one.
  */
 export class TurnQueue {
   private tail: Promise<unknown> = Promise.resolve();

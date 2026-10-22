@@ -12,7 +12,7 @@ import {
   type SessionState,
   type UserId,
 } from "@hibi/core";
-import { Daemon, findRepoRoot, socketPath } from "@hibi/daemon";
+import { Daemon, findRepoRoot, serve, socketPath } from "@hibi/daemon";
 
 import { DaemonClient } from "./client";
 import {
@@ -50,7 +50,7 @@ const PREFERENCE_KEYS = [
   "explanationStyle",
 ] as const;
 
-async function runDaemon(repoRoot: string): Promise<void> {
+async function runDaemon(): Promise<void> {
   const credentials = await loadCredentials();
   if (credentials === null) {
     process.stderr.write("no credentials; run `hibi` first\n");
@@ -58,21 +58,20 @@ async function runDaemon(repoRoot: string): Promise<void> {
   }
 
   const provider = buildProvider(credentials);
-  const daemon = new Daemon({ repoRoot, provider });
-  await daemon.start();
+  await serve(new Daemon({ provider, home: HIBI_HOME }), HIBI_HOME);
 
-  stdout.write(banner(provider.model, repoRoot));
-  stdout.write(ui.dim(`listening on ${socketPath(repoRoot, HIBI_HOME)}\n`));
+  stdout.write(banner(provider.model));
+  stdout.write(ui.dim(`listening on ${socketPath(HIBI_HOME)}\n`));
 
   await new Promise(() => {});
 }
 
-/** Spawns a detached daemon and waits for its socket to appear */
-async function ensureDaemon(
-  repoRoot: string,
-  strings: Catalog,
-): Promise<DaemonClient> {
-  const path = socketPath(repoRoot, HIBI_HOME);
+/**
+ * Connects to the user's daemon, spawning it detached when none is running.
+ * It runs from the home directory, so it never holds a project folder open
+ */
+async function ensureDaemon(strings: Catalog): Promise<DaemonClient> {
+  const path = socketPath(HIBI_HOME);
 
   try {
     const client = new DaemonClient();
@@ -83,7 +82,7 @@ async function ensureDaemon(
   }
 
   Bun.spawn(["bun", import.meta.path, "daemon"], {
-    cwd: repoRoot,
+    cwd: homedir(),
     stdin: "ignore",
     stdout: "ignore",
     stderr: "inherit",
@@ -124,7 +123,14 @@ async function chat(repoRoot: string): Promise<void> {
   const language = learner.preferences.language;
   const strings = catalogFor(language);
   const provider = buildProvider(credentials);
-  const client = await ensureDaemon(repoRoot, strings);
+  const client = await ensureDaemon(strings);
+
+  const refusal = await client.openSpace(repoRoot);
+  if (refusal !== null) {
+    process.stderr.write(`${refusal}\n`);
+    client.close();
+    return;
+  }
 
   const { waitUntilExit } = render(
     <App
@@ -393,10 +399,11 @@ async function handleForget(
 }
 
 const [command] = process.argv.slice(2);
-const repoRoot = await findRepoRoot(process.cwd());
 
-if (command === "daemon") await runDaemon(repoRoot);
-else if (command === "chat" || command === undefined) await chat(repoRoot);
+if (command === "daemon") await runDaemon();
+else if (command === "chat" || command === undefined) {
+  await chat(await findRepoRoot(process.cwd()));
+}
 else {
   process.stderr.write("usage: hibi | hibi chat | hibi daemon\n");
   process.exit(1);

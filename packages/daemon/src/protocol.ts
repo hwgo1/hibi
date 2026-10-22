@@ -3,8 +3,12 @@ import { z } from "zod";
 /**
  * Wire format between clients and the daemon, exported so every client
  * compiles against the same shape rather than a hand-written copy.
+ *
+ * A connection first sends `open_space`; message, state, undo, forget, clear
+ * and reindex then act on that space. The rest act on the user.
  */
 export const ClientRequestSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("open_space"), root: z.string().min(1) }),
   z.object({ type: z.literal("message"), text: z.string().min(1) }),
   z.object({ type: z.literal("state") }),
   z.object({ type: z.literal("profile") }),
@@ -28,6 +32,7 @@ export const ClientRequestSchema = z.discriminatedUnion("type", [
 export type ClientRequest = z.infer<typeof ClientRequestSchema>;
 
 export type ServerEvent =
+  | { type: "space"; id: string; root: string }
   | { type: "text"; text: string }
   | { type: "tool"; name: string; args?: unknown }
   | { type: "step"; step: 1 | 2 | 3 }

@@ -18,10 +18,6 @@ export const ui = {
   bold: (text: string) => paint(ANSI.bold, text),
 };
 
-export function banner(model: string, repoRoot: string): string {
-  return [
-    `${ui.fox("hibi")} ${ui.dim("日々")}`,
-    ui.dim(`${model} · ${repoRoot}`),
-    "",
-  ].join("\n");
+export function banner(model: string): string {
+  return [`${ui.fox("hibi")} ${ui.dim("日々")}`, ui.dim(model), ""].join("\n");
 }

@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
-import { mkdir, rm } from "node:fs/promises";
-import { createServer, type Server, type Socket } from "node:net";
+import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import {
   indexRepo,
@@ -16,157 +15,71 @@ import {
   type CommandOutcome,
   type LLMProvider,
   type SessionId,
-  type SessionState,
   type UserId,
 } from "@hibi/core";
 
-import { acquireLock, releaseLock } from "./lockfile";
-import {
-  ClientRequestSchema,
-  decodeLines,
-  encode,
-  type ClientRequest,
-  type ServerEvent,
-} from "./protocol";
+import type { ClientRequest, ServerEvent } from "./protocol";
 import { TurnQueue } from "./turn-queue";
 
 const LOCAL_USER = "local" as UserId;
 
+/** One attached connection, as the daemon sees it */
+export interface Client {
+  send(event: ServerEvent): void;
+}
+
+/** Everything but `shutdown`, which belongs to the transport that owns the process */
+export type DaemonRequest = Exclude<ClientRequest, { type: "shutdown" }>;
+
 export interface DaemonOptions {
-  repoRoot: string;
   provider: LLMProvider;
   home?: string;
   clock?: Clock;
+}
+
+interface Space {
+  id: string;
+  root: string;
+  tutor: TutorSession;
+  clients: Set<Client>;
 }
 
 export function repoKey(repoRoot: string): string {
   return createHash("sha256").update(repoRoot).digest("hex").slice(0, 16);
 }
 
-export function socketPath(repoRoot: string, home: string): string {
-  return join(home, "run", `${repoKey(repoRoot)}.sock`);
-}
-
+/**
+ * Owns the user's state for every space at once. Requests that change state
+ * run one at a time, because spaces share the learner, the concepts and the
+ * log. Knows nothing about sockets, so it runs under test without one.
+ */
 export class Daemon {
   private readonly storage: StorageLocal;
   private readonly queue = new TurnQueue();
-  private readonly clients = new Set<Socket>();
-  private readonly home: string;
   private readonly clock: Clock;
-
-  private server: Server | null = null;
-  private tutor: TutorSession | null = null;
-  private lockPath: string | null = null;
+  private readonly spaces = new Map<string, Promise<Space>>();
+  private readonly attached = new Map<Client, Space>();
 
   constructor(private readonly options: DaemonOptions) {
-    this.home = options.home ?? join(homedir(), ".hibi");
     this.clock = options.clock ?? systemClock;
-    this.storage = new StorageLocal(this.home);
+    this.storage = new StorageLocal(options.home ?? join(homedir(), ".hibi"));
   }
 
-  async start(): Promise<void> {
-    const runDir = join(this.home, "run");
-    await mkdir(runDir, { recursive: true });
-
-    this.lockPath = join(runDir, `${repoKey(this.options.repoRoot)}.lock`);
-    if (!(await acquireLock(this.lockPath))) {
-      throw new Error(
-        `a hibi daemon is already running for ${this.options.repoRoot}`,
-      );
-    }
-
-    this.tutor = new TutorSession(
-      {
-        provider: this.options.provider,
-        storage: this.storage,
-        workspace: new WorkspaceFs(this.options.repoRoot),
-        clock: this.clock,
-      },
-      await this.loadSession(),
-    );
-    await this.ensureIndexed();
-
-    const path = socketPath(this.options.repoRoot, this.home);
-    await rm(path, { force: true });
-
-    this.server = createServer((socket) => this.attach(socket));
-    await new Promise<void>((resolve) => this.server!.listen(path, resolve));
-
-    process.on("SIGINT", () => void this.stop());
-    process.on("SIGTERM", () => void this.stop());
-  }
-
-  async stop(): Promise<void> {
-    if (this.lockPath !== null) await releaseLock(this.lockPath);
-    await rm(socketPath(this.options.repoRoot, this.home), { force: true });
-    process.exit(0);
-  }
-
-  private async loadSession(): Promise<SessionState> {
-    const id = repoKey(this.options.repoRoot) as SessionId;
-    const existing = await this.storage.loadSession(id);
-    return (
-      existing ??
-      newSessionState(id, LOCAL_USER, this.options.repoRoot, this.clock.now())
-    );
-  }
-
-  /**
-   * Indexes the repository when no model exists yet, so a first run needs no
-   * separate command. Failure is not fatal: the tutor can still read files, it
-   * just starts each session without a map.
-   */
-  private async ensureIndexed(): Promise<void> {
-    if ((await this.storage.loadRepoModel(this.options.repoRoot)) !== null)
-      return;
-
-    try {
-      const model = await indexRepo(this.options.repoRoot, this.clock.now());
-      await this.storage.saveRepoModel(model);
-    } catch {
-      // leaves the repo model null; the prompt omits the <repo> block
-    }
-  }
-
-  private attach(socket: Socket): void {
-    this.clients.add(socket);
-    socket.setNoDelay(true);
-    let buffer = "";
-
-    socket.on("data", (chunk) => {
-      buffer += chunk.toString();
-      const { messages, rest } = decodeLines<unknown>(buffer);
-      buffer = rest;
-
-      for (const raw of messages) {
-        const parsed = ClientRequestSchema.safeParse(raw);
-        if (!parsed.success) {
-          this.reply(socket, { type: "error", message: "malformed request" });
-          continue;
-        }
-        void this.handle(parsed.data, socket);
-      }
-    });
-
-    socket.on("close", () => this.clients.delete(socket));
-    socket.on("error", () => this.clients.delete(socket));
-  }
-
-  private async handle(request: ClientRequest, socket: Socket): Promise<void> {
+  async handle(request: DaemonRequest, client: Client): Promise<void> {
     switch (request.type) {
-      case "state":
-        this.reply(socket, { type: "state", payload: this.tutor?.session });
+      case "open_space":
+        await this.openSpace(request.root, client);
         return;
 
       case "profile": {
         const learner = await this.storage.loadLearnerModel(LOCAL_USER);
-        this.reply(socket, { type: "profile", payload: learner });
+        this.reply(client, { type: "profile", payload: learner });
         return;
       }
 
       case "signals": {
         const learner = await this.storage.loadLearnerModel(LOCAL_USER);
-        this.reply(socket, {
+        this.reply(client, {
           type: "signals",
           payload: learner?.inferredSignals ?? [],
         });
@@ -174,40 +87,119 @@ export class Daemon {
       }
 
       case "set_preference":
-        await this.setPreference(request.key, request.value, socket);
+        await this.setPreference(request.key, request.value, client);
+        return;
+    }
+
+    const space = this.attached.get(client);
+    if (space === undefined) {
+      this.reply(client, {
+        type: "error",
+        message: "no space is open: send open_space first",
+      });
+      return;
+    }
+
+    switch (request.type) {
+      case "message":
+        await this.queue.run(() => this.runTurn(space, request.text));
+        return;
+
+      case "state":
+        this.reply(client, { type: "state", payload: space.tutor.session });
         return;
 
       case "undo":
-        await this.command(socket, (tutor) => tutor.undo());
+        await this.command(client, () => space.tutor.undo());
         return;
 
       case "forget":
-        await this.command(socket, (tutor) => {
-          if (request.scope === "all") return tutor.forgetAll();
+        await this.command(client, () => {
+          if (request.scope === "all") return space.tutor.forgetAll();
           if (request.value === undefined) {
             return Promise.resolve({ ok: false, message: "which concept?" });
           }
-          return tutor.forget(request.value);
+          return space.tutor.forget(request.value);
         });
         return;
 
       case "clear":
-        this.tutor?.clearTranscript();
-        this.reply(socket, { type: "ok", message: "conversation cleared" });
+        space.tutor.clearTranscript();
+        this.reply(client, { type: "ok", message: "conversation cleared" });
         return;
 
       case "reindex":
-        await this.reindex(socket);
+        await this.reindex(space.root, client);
         return;
+    }
+  }
 
-      case "shutdown":
-        socket.write(encode({ type: "turn_end" }));
-        await this.stop();
-        return;
+  /** Stops routing events to a connection that went away */
+  detach(client: Client): void {
+    this.attached.get(client)?.clients.delete(client);
+    this.attached.delete(client);
+  }
 
-      case "message":
-        await this.queue.run(() => this.runTurn(request.text));
-        return;
+  private async openSpace(root: string, client: Client): Promise<void> {
+    const absolute = resolve(root);
+    const problem = await rootProblem(absolute);
+    if (problem !== null) {
+      this.reply(client, { type: "error", message: problem });
+      return;
+    }
+
+    const space = await this.loadSpace(absolute);
+    this.detach(client);
+    space.clients.add(client);
+    this.attached.set(client, space);
+
+    this.reply(client, { type: "space", id: space.id, root: space.root });
+  }
+
+  /** Loads a space on first use. The promise is cached, so two clients opening the same root share one tutor */
+  private loadSpace(root: string): Promise<Space> {
+    const id = repoKey(root);
+    let space = this.spaces.get(id);
+
+    if (space === undefined) {
+      space = this.createSpace(id, root);
+      this.spaces.set(id, space);
+      space.catch(() => this.spaces.delete(id));
+    }
+    return space;
+  }
+
+  private async createSpace(id: string, root: string): Promise<Space> {
+    const session =
+      (await this.storage.loadSession(id as SessionId)) ??
+      newSessionState(id as SessionId, LOCAL_USER, root, this.clock.now());
+
+    const tutor = new TutorSession(
+      {
+        provider: this.options.provider,
+        storage: this.storage,
+        workspace: new WorkspaceFs(root),
+        clock: this.clock,
+      },
+      session,
+    );
+
+    await this.ensureIndexed(root);
+    return { id, root, tutor, clients: new Set() };
+  }
+
+  /**
+   * Indexes a root that has no model yet, so a first run needs no separate
+   * command. Failure is not fatal: the tutor can still read files, it just
+   * starts without a map.
+   */
+  private async ensureIndexed(root: string): Promise<void> {
+    if ((await this.storage.loadRepoModel(root)) !== null) return;
+
+    try {
+      await this.storage.saveRepoModel(await indexRepo(root, this.clock.now()));
+    } catch {
+      // leaves the repo model null; the prompt omits the <repo> block
     }
   }
 
@@ -218,17 +210,17 @@ export class Daemon {
   private async setPreference(
     key: string,
     value: string,
-    socket: Socket,
+    client: Client,
   ): Promise<void> {
     const learner = await this.storage.loadLearnerModel(LOCAL_USER);
 
     if (learner === null) {
-      this.reply(socket, { type: "error", message: "no profile yet" });
+      this.reply(client, { type: "error", message: "no profile yet" });
       return;
     }
 
     if (!Object.keys(learner.preferences).includes(key)) {
-      this.reply(socket, {
+      this.reply(client, {
         type: "error",
         message: `unknown preference: ${key}`,
       });
@@ -241,7 +233,7 @@ export class Daemon {
     });
 
     if (!parsed.success) {
-      this.reply(socket, {
+      this.reply(client, {
         type: "error",
         message: `invalid value for ${key}: ${value}`,
       });
@@ -252,34 +244,31 @@ export class Daemon {
     learner.updatedAt = this.clock.now().toISOString();
     await this.storage.saveLearnerModel(learner);
 
-    this.reply(socket, { type: "ok", message: `${key} = ${value}` });
+    this.reply(client, { type: "ok", message: `${key} = ${value}` });
   }
 
   /** Runs a state-changing command in turn order, so it never interleaves with a turn */
   private async command(
-    socket: Socket,
-    run: (tutor: TutorSession) => Promise<CommandOutcome>,
+    client: Client,
+    run: () => Promise<CommandOutcome>,
   ): Promise<void> {
-    const tutor = this.tutor;
-    if (tutor === null) return;
-    const result = await this.queue.run(() => run(tutor));
-    this.reply(socket, {
+    const result = await this.queue.run(run);
+    this.reply(client, {
       type: result.ok ? "ok" : "error",
       message: result.message,
     });
   }
 
-  /** Rebuilds the repository model on demand */
-  private async reindex(socket: Socket): Promise<void> {
+  private async reindex(root: string, client: Client): Promise<void> {
     try {
-      const model = await indexRepo(this.options.repoRoot, this.clock.now());
+      const model = await indexRepo(root, this.clock.now());
       await this.storage.saveRepoModel(model);
-      this.reply(socket, {
+      this.reply(client, {
         type: "ok",
         message: `indexed ${model.fileStats.total} files, ${model.fileStats.user} yours`,
       });
     } catch (error) {
-      this.reply(socket, {
+      this.reply(client, {
         type: "error",
         message: `index failed: ${String(error)}`,
       });
@@ -287,22 +276,23 @@ export class Daemon {
   }
 
   /**
-   * Broadcasts to every attached client rather than replying to the sender:
-   * the session is shared, so a turn started in the terminal must also reach
-   * an editor panel watching the same daemon
+   * Sends the turn to every client attached to the space, so a turn started
+   * in the terminal also reaches an editor panel on the same space, and to
+   * no one in other spaces
    */
-  private async runTurn(text: string): Promise<void> {
-    const tutor = this.tutor;
-    if (tutor === null) return;
+  private async runTurn(space: Space, text: string): Promise<void> {
+    const send = (event: ServerEvent) => {
+      for (const client of space.clients) client.send(event);
+    };
 
     try {
-      for await (const event of tutor.turn(text)) {
+      for await (const event of space.tutor.turn(text)) {
         if (event.type === "text") {
-          this.broadcast({ type: "text", text: event.text });
+          send({ type: "text", text: event.text });
         } else if (event.type === "tool") {
-          this.broadcast({ type: "tool", name: event.name, args: event.args });
+          send({ type: "tool", name: event.name, args: event.args });
         } else if (event.type === "usage") {
-          this.broadcast({
+          send({
             type: "usage",
             inputTokens: event.usage.inputTokens,
             cachedInputTokens: event.usage.cachedInputTokens ?? 0,
@@ -310,37 +300,46 @@ export class Daemon {
             model: event.model,
           });
         } else {
-          this.broadcast({ type: "error", message: event.message });
+          send({ type: "error", message: event.message });
         }
       }
     } catch (error) {
-      this.broadcast({
+      send({
         type: "error",
         message: error instanceof Error ? error.message : String(error),
       });
     }
 
-    const session = tutor.session;
+    const session = space.tutor.session;
     const active = session.items.find(
       (item) => item.id === session.activeItemId,
     );
     if (active?.ladder !== undefined) {
-      this.broadcast({ type: "step", step: active.ladder.step });
+      send({ type: "step", step: active.ladder.step });
     }
 
-    this.broadcast({ type: "turn_end" });
+    send({ type: "turn_end" });
   }
 
-  /** Answers one client and closes the exchange. */
-  private reply(socket: Socket, event: ServerEvent): void {
-    socket.write(encode(event));
-    socket.write(encode({ type: "turn_end" }));
+  /** Answers one client and closes the exchange */
+  private reply(client: Client, event: ServerEvent): void {
+    client.send(event);
+    client.send({ type: "turn_end" });
   }
+}
 
-  private broadcast(event: ServerEvent): void {
-    const line = encode(event);
-    for (const socket of this.clients) {
-      socket.write(line);
-    }
+/**
+ * A space root must be a project folder. The home directory and a filesystem
+ * root are refused: indexing either would walk everything the user owns
+ */
+async function rootProblem(root: string): Promise<string | null> {
+  if (root === resolve(homedir()) || dirname(root) === root) {
+    return `${root} is not a project folder; run hibi inside one`;
   }
+  try {
+    if (!(await stat(root)).isDirectory()) return `${root} is not a folder`;
+  } catch {
+    return `${root} does not exist`;
+  }
+  return null;
 }
