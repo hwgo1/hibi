@@ -17,7 +17,7 @@ import {
   emptySpend,
   formatSpend,
   type SessionSpend,
-} from "../pricing";
+} from "../spend";
 import { Prompt } from "./Prompt";
 import { RowView } from "./RowView";
 import { Thinking } from "./Thinking";
@@ -88,15 +88,7 @@ export function App({
         return;
 
       case "usage":
-        spend.current = addUsage(
-          spend.current,
-          {
-            inputTokens: event.inputTokens,
-            cachedInputTokens: event.cachedInputTokens,
-            outputTokens: event.outputTokens,
-          },
-          event.model,
-        );
+        spend.current = addUsage(spend.current, event);
         return;
 
       case "error":

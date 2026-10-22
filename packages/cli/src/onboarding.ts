@@ -1,20 +1,12 @@
 import { stdout } from "node:process";
-import type { Interface } from "node:readline/promises";
 
-import {
-  DEFAULT_TEACHING_PREFERENCES,
-  StorageLocal,
-  systemClock,
-  type LearnerModel,
-  type UserId,
-} from "@hibi/core";
+import { isKnownLanguage, PROVIDER_KEY_URLS, type ProviderId } from "@hibi/core";
+import type { Settings } from "@hibi/daemon";
 
-import { saveCredentials, type Credentials, type ProviderId } from "./config";
+import type { DaemonClient } from "./client";
 import { catalogFor, fill, type Catalog } from "./i18n";
-import { MODEL_CHOICES, PROVIDER_KEY_URLS, verifyCredentials } from "./models";
 import { ui } from "./render";
 
-const LOCAL_USER = "local" as UserId;
 const MAX_NAME_LENGTH = 40;
 
 /** Aligns step content under the step title, past "  1/3 " */
@@ -22,15 +14,8 @@ const INDENT = "      ";
 
 const REFUSED_KEY = /401|incorrect api key|invalid.*key|authentication/i;
 
-export interface OnboardingState {
-  credentials: Credentials | null;
-  learner: LearnerModel | null;
-}
-
-export interface OnboardingResult {
-  credentials: Credentials;
-  learner: LearnerModel;
-}
+/** Answers that confirm the detected language. Checked before validation, since "si" is also a language tag */
+const CONFIRMATIONS = new Set(["", "y", "yes", "s", "sim", "si", "sí", "ok"]);
 
 export function detectLanguage(): string {
   const fromEnv = process.env["LANG"] ?? process.env["LC_ALL"];
@@ -49,73 +34,88 @@ export function languageName(tag: string): string {
   }
 }
 
+/** What a typed answer to "is your language X?" means: the detected language, another known one, or nothing usable */
+export function chosenLanguage(answer: string, detected: string): string | null {
+  const trimmed = answer.trim();
+  if (CONFIRMATIONS.has(trimmed.toLowerCase())) return detected;
+  return isKnownLanguage(trimmed) ? trimmed : null;
+}
+
+/** Shows a prompt and resolves with the typed line */
+export type Ask = (prompt: string) => Promise<string>;
+
+/**
+ * Asks only for what the daemon is missing: language and name, then a key.
+ * Everything is saved by the daemon. Resolves with the learner's language
+ */
 export async function runOnboarding(
-  rl: Interface,
-  home: string,
-  state: OnboardingState,
-): Promise<OnboardingResult> {
-  const storage = new StorageLocal(home);
+  ask: Ask,
+  client: DaemonClient,
+  settings: Settings,
+): Promise<string> {
   const detected = detectLanguage();
   const total =
-    (state.learner === null ? 2 : 0) + (state.credentials === null ? 1 : 0);
+    (settings.profile === null ? 2 : 0) + (settings.provider === null ? 1 : 0);
   let step = 0;
+  let language = settings.profile?.language ?? detected;
 
-  const opening = catalogFor(state.learner?.preferences.language ?? detected);
+  const opening = catalogFor(language);
   stdout.write(`\n  ${ui.bold(ui.fox("hibi"))} ${ui.dim("日々")}\n`);
 
-  if (state.learner === null) {
+  if (settings.profile === null) {
     stdout.write(`\n  ${opening.onboardIntro}\n`);
     say(opening.onboardIntroDetail, { indent: "  ", dim: true });
-  }
 
-  let learner = state.learner;
-
-  if (learner === null) {
     heading(++step, total, opening.stepLanguage);
-    const language = await askLanguage(rl, opening, detected);
+    language = await askLanguage(ask, opening, detected);
     const strings = catalogFor(language);
 
     heading(++step, total, strings.stepName);
-    const name = await askName(rl, strings);
-
-    learner = newLearner(language, name);
-    await storage.saveLearnerModel(learner);
+    const name = await askName(ask, strings);
+    await client.call({ type: "set_profile", language, name });
   }
 
-  const strings = catalogFor(learner.preferences.language);
-  let credentials = state.credentials;
+  const strings = catalogFor(language);
 
-  if (credentials === null) {
+  if (settings.provider === null) {
     heading(++step, total, strings.stepKey);
-    credentials = await askKey(rl, strings);
+    await askKey(ask, client, strings);
   }
 
   stdout.write(`\n  ${strings.ready}\n\n`);
-  return { credentials, learner };
+  return language;
 }
 
 async function askLanguage(
-  rl: Interface,
+  ask: Ask,
   strings: Catalog,
   detected: string,
 ): Promise<string> {
   const question = fill(strings.languageConfirm, {
     language: languageName(detected),
   });
-  const answer = (await rl.question(`${INDENT}${question} `)).trim();
-  return answer.length >= 2 ? answer : detected;
+
+  for (;;) {
+    const answer = await ask(`${INDENT}${question} `);
+    const language = chosenLanguage(answer, detected);
+    if (language !== null) return language;
+  }
 }
 
-async function askName(rl: Interface, strings: Catalog): Promise<string> {
-  const answer = (await rl.question(`${INDENT}${strings.namePrompt} `)).trim();
+async function askName(ask: Ask, strings: Catalog): Promise<string> {
+  const answer = (await ask(`${INDENT}${strings.namePrompt} `)).trim();
   return answer.slice(0, MAX_NAME_LENGTH);
 }
 
 /**
- * Asks for a provider and a key until a key works. A refused key sends the
- * learner back to the provider choice
+ * Asks for a provider and a key until the daemon accepts one. A refused key
+ * sends the learner back to the provider choice
  */
-async function askKey(rl: Interface, strings: Catalog): Promise<Credentials> {
+async function askKey(
+  ask: Ask,
+  client: DaemonClient,
+  strings: Catalog,
+): Promise<void> {
   say(strings.keyExplain, { dim: true });
 
   for (;;) {
@@ -125,7 +125,7 @@ async function askKey(rl: Interface, strings: Catalog): Promise<Credentials> {
     stdout.write(`${INDENT}  ${ui.fox("2")}  Anthropic\n`);
 
     const choice = (
-      await rl.question(`${INDENT}${strings.choosePrompt} `)
+      await ask(`${INDENT}${strings.choosePrompt} `)
     ).trim();
     const provider: ProviderId = choice === "2" ? "anthropic" : "openai";
 
@@ -134,24 +134,20 @@ async function askKey(rl: Interface, strings: Catalog): Promise<Credentials> {
       dim: true,
     });
 
-    const apiKey = await readKey(rl, strings);
-    const credentials: Credentials = {
-      provider,
-      apiKey,
-      model: MODEL_CHOICES[provider][0]!.id,
-    };
+    const apiKey = await readKey(ask, strings);
 
     stdout.write(`${INDENT}${ui.dim(strings.keyChecking)} `);
-    const failure = await verifyCredentials(credentials);
+    const events = await client.call({ type: "set_key", provider, apiKey });
+    const refusal = events.find((event) => event.type === "error");
 
-    if (failure === null) {
+    if (refusal === undefined) {
       stdout.write(`${strings.keyOk}\n`);
-      await saveCredentials(credentials);
       say(strings.keySaved, { dim: true });
-      return credentials;
+      return;
     }
 
-    stdout.write(`${describeFailure(failure, strings)}\n`);
+    const reason = refusal.type === "error" ? refusal.message : "";
+    stdout.write(`${describeFailure(reason, strings)}\n`);
   }
 }
 
@@ -159,10 +155,10 @@ async function askKey(rl: Interface, strings: Catalog): Promise<Credentials> {
  * Reads the key, then rewrites the line with all but the last four characters
  * hidden, so the key does not stay readable in the terminal's scrollback
  */
-async function readKey(rl: Interface, strings: Catalog): Promise<string> {
+async function readKey(ask: Ask, strings: Catalog): Promise<string> {
   for (;;) {
     const prompt = `${INDENT}${strings.keyPrompt} `;
-    const key = (await rl.question(prompt)).trim();
+    const key = (await ask(prompt)).trim();
 
     if (key.length === 0) {
       say(strings.keyRequired, { dim: true });
@@ -180,22 +176,6 @@ function describeFailure(failure: string, strings: Catalog): string {
   if (REFUSED_KEY.test(failure)) return strings.keyInvalid;
   const reason = failure.length > 80 ? `${failure.slice(0, 79)}…` : failure;
   return fill(strings.keyFailed, { reason });
-}
-
-function newLearner(language: string, name: string): LearnerModel {
-  const at = systemClock.now().toISOString();
-  return {
-    schemaVersion: 1,
-    userId: LOCAL_USER,
-    createdAt: at,
-    updatedAt: at,
-    preferences: { ...DEFAULT_TEACHING_PREFERENCES, language, name },
-    goal: null,
-    mastery: [],
-    seen: [],
-    recurringErrors: [],
-    inferredSignals: [],
-  };
 }
 
 function heading(step: number, total: number, title: string): void {

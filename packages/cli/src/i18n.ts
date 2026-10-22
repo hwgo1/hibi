@@ -11,7 +11,8 @@ type StringKey =
   | "unknownCommand"
   | "noProfile"
   | "changeWith"
-  | "restartNeeded"
+  | "nowUsing"
+  | "keyRemoved"
   | "forgetWarning"
   | "onboardIntro"
   | "onboardIntroDetail"
@@ -59,7 +60,8 @@ const CATALOGS: Record<string, Catalog> = {
       "I don't know that command. Type /help to see the ones that exist.",
     noProfile: "There's no profile yet.",
     changeWith: "To change one: /prefs <name> <value>",
-    restartNeeded: "Saved. Close and reopen hibi for it to take effect.",
+    nowUsing: "Now using {model}.",
+    keyRemoved: "Key removed. Open hibi again to add one.",
     forgetWarning:
       "This permanently deletes your whole learning history.\nTo confirm, type: /forget all forget",
     onboardIntro: "Hi! I'm hibi, a programming tutor.",
@@ -101,7 +103,8 @@ const CATALOGS: Record<string, Catalog> = {
       "Não conheço esse comando. Digite /help para ver os que existem.",
     noProfile: "Ainda não há perfil.",
     changeWith: "Para mudar: /prefs <nome> <valor>",
-    restartNeeded: "Salvo. Feche e abra o hibi de novo para valer.",
+    nowUsing: "Agora usando {model}.",
+    keyRemoved: "Chave removida. Abra o hibi de novo para adicionar outra.",
     forgetWarning:
       "Isso apaga todo o seu histórico de aprendizado, sem volta.\nPara confirmar, digite: /forget all forget",
     onboardIntro: "Oi! Eu sou o hibi, um tutor de programação.",
@@ -143,7 +146,8 @@ const CATALOGS: Record<string, Catalog> = {
       "No conozco ese comando. Escribe /help para ver los que existen.",
     noProfile: "Todavía no hay perfil.",
     changeWith: "Para cambiarlo: /prefs <nombre> <valor>",
-    restartNeeded: "Guardado. Cierra y vuelve a abrir hibi para aplicarlo.",
+    nowUsing: "Ahora usando {model}.",
+    keyRemoved: "Clave eliminada. Abre hibi de nuevo para añadir otra.",
     forgetWarning:
       "Esto borra todo tu historial de aprendizaje, sin vuelta atrás.\nPara confirmar, escribe: /forget all forget",
     onboardIntro: "¡Hola! Soy hibi, un tutor de programación.",

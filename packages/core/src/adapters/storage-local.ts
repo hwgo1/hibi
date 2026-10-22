@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import {
   appendFile,
   mkdir,
-  open,
   readFile,
   rename,
   rm,
@@ -34,6 +33,9 @@ import {
  * Learner model, concept registry and evidence are per user and shared by
  * every repository, so knowledge carries across projects. Session and repo
  * model are per repository, keyed by a hash of its absolute path.
+ *
+ * The daemon is the only process that writes here, one request at a time,
+ * so no write needs a lock.
  */
 const LAYOUT = {
   profile: "profile.json",
@@ -41,9 +43,6 @@ const LAYOUT = {
   evidence: "evidence.jsonl",
   repos: "repos",
 } as const;
-
-const LOCK_TIMEOUT_MS = 10_000;
-const LOCK_RETRY_MS = 50;
 
 function repoKey(repoRoot: string): string {
   return createHash("sha256").update(repoRoot).digest("hex").slice(0, 16);
@@ -63,37 +62,6 @@ async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
   } catch (error) {
     await unlink(tmp).catch(() => {});
     throw error;
-  }
-}
-
-/**
- * Advisory lock guarding read-modify-write cycles on per-user files that
- * daemons in different repositories share. `wx` makes creation an atomic
- * test-and-set; a lock left by a crashed process is broken after the timeout.
- */
-async function withLock<T>(lockPath: string, fn: () => Promise<T>): Promise<T> {
-  await mkdir(dirname(lockPath), { recursive: true });
-  const deadline = Date.now() + LOCK_TIMEOUT_MS;
-
-  for (;;) {
-    try {
-      const handle = await open(lockPath, "wx");
-      await handle.writeFile(String(process.pid));
-      await handle.close();
-      break;
-    } catch {
-      if (Date.now() > deadline) {
-        await rm(lockPath, { force: true });
-        continue;
-      }
-      await new Promise((resolve) => setTimeout(resolve, LOCK_RETRY_MS));
-    }
-  }
-
-  try {
-    return await fn();
-  } finally {
-    await rm(lockPath, { force: true });
   }
 }
 
@@ -152,9 +120,7 @@ export class StorageLocal implements Storage {
   }
 
   async saveLearnerModel(model: LearnerModel): Promise<void> {
-    await withLock(`${this.profilePath()}.lock`, () =>
-      writeJsonAtomic(this.profilePath(), model),
-    );
+    await writeJsonAtomic(this.profilePath(), model);
   }
 
   async loadConceptRegistry(_userId: UserId): Promise<ConceptRegistry | null> {
@@ -167,9 +133,7 @@ export class StorageLocal implements Storage {
     _userId: UserId,
     registry: ConceptRegistry,
   ): Promise<void> {
-    await withLock(`${this.conceptsPath()}.lock`, () =>
-      writeJsonAtomic(this.conceptsPath(), registry),
-    );
+    await writeJsonAtomic(this.conceptsPath(), registry);
   }
 
   async loadSession(sessionId: SessionId): Promise<SessionState | null> {
@@ -281,10 +245,8 @@ export class StorageLocal implements Storage {
     sessionId: SessionId,
     repoRoot: string,
   ): Promise<void> {
-    await withLock(`${this.sessionIndexPath()}.lock`, async () => {
-      const index = await this.readSessionIndex();
-      index[sessionId] = repoRoot;
-      await writeJsonAtomic(this.sessionIndexPath(), index);
-    });
+    const index = await this.readSessionIndex();
+    index[sessionId] = repoRoot;
+    await writeJsonAtomic(this.sessionIndexPath(), index);
   }
 }

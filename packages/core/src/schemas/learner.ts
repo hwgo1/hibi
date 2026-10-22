@@ -9,13 +9,31 @@ import {
 } from "../ids";
 import { GoalSchema } from "./goal";
 
+const LANGUAGE_NAMES = new Intl.DisplayNames(["en"], {
+  type: "language",
+  fallback: "none",
+});
+
+/** Whether a tag names a language the runtime knows, so a stray word such as "yes" is never taken for one */
+export function isKnownLanguage(tag: string): boolean {
+  try {
+    const [canonical] = Intl.getCanonicalLocales(tag);
+    return canonical !== undefined && LANGUAGE_NAMES.of(canonical) !== undefined;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Settings the user declared explicitly. They configure how the tutor
  * addresses and teaches the user
  */
 export const TeachingPreferencesSchema = z.object({
   name: z.string().max(40).default(""),
-  language: z.string().min(2).default("pt-BR"),
+  language: z
+    .string()
+    .refine(isKnownLanguage, "not a known language tag")
+    .default("pt-BR"),
   theoryDepth: z.enum(["minimal", "balanced", "thorough"]).default("balanced"),
   exerciseSize: z.enum(["small", "medium", "large"]).default("medium"),
   unsolicitedHints: z

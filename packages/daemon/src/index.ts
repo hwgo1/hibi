@@ -1,3 +1,6 @@
+export * from "./account";
+export * from "./active-provider";
+export * from "./credentials";
 export * from "./daemon";
 export * from "./protocol";
 export * from "./repo-root";

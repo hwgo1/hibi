@@ -13,6 +13,8 @@ export * from "./policy/mastery";
 export * from "./session/rules";
 export * from "./session/prompt";
 export * from "./session/tutor-session";
+export * from "./session/learner-model";
+export * from "./models";
 export * from "./session/lifecycle";
 export * from "./tools";
 export * from "./adapters/storage-local";

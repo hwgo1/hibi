@@ -1,16 +1,17 @@
 #!/usr/bin/env bun
 import { render } from "ink";
+import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
+import { join } from "node:path";
 import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline/promises";
 
 import {
-  StorageLocal,
+  MODEL_CHOICES,
+  ProviderIdSchema,
   type InferredSignal,
   type LearnerModel,
-  type LLMProvider,
   type SessionState,
-  type UserId,
 } from "@hibi/core";
 import {
   Daemon,
@@ -18,32 +19,19 @@ import {
   serve,
   socketPath,
   type RequestBody,
+  type Settings,
 } from "@hibi/daemon";
 
 import { DaemonClient } from "./client";
-import {
-  activateProvider,
-  clearCredentials,
-  HIBI_HOME,
-  loadCredentials,
-  ProviderIdSchema,
-  setActiveModel,
-  storedProviders,
-} from "./config";
 import { formatProfile, formatSignals, formatState } from "./format";
 import { helpFor } from "./help";
 import { catalogFor, fill, type Catalog } from "./i18n";
-import { buildProvider, MODEL_CHOICES } from "./models";
-import {
-  runOnboarding,
-  type OnboardingResult,
-  type OnboardingState,
-} from "./onboarding";
+import { detectLanguage, runOnboarding } from "./onboarding";
 import { banner, ui } from "./render";
 import { App, type CommandResult } from "./ui/App";
 import type { WelcomeContent } from "./ui/Welcome";
 
-const LOCAL_USER = "local" as UserId;
+const HIBI_HOME = join(homedir(), ".hibi");
 
 const PREFERENCE_KEYS = [
   "name",
@@ -55,60 +43,43 @@ const PREFERENCE_KEYS = [
 ] as const;
 
 async function runDaemon(): Promise<void> {
-  const credentials = await loadCredentials();
-  if (credentials === null) {
-    process.stderr.write("no credentials; run `hibi` first\n");
-    process.exit(1);
-  }
+  await serve(new Daemon({ home: HIBI_HOME }), HIBI_HOME);
 
-  const provider = buildProvider(credentials);
-  await serve(new Daemon({ provider, home: HIBI_HOME }), HIBI_HOME);
-
-  stdout.write(banner(provider.model));
+  stdout.write(banner());
   stdout.write(ui.dim(`listening on ${socketPath(HIBI_HOME)}\n`));
 
   await new Promise(() => {});
 }
 
 /**
- * Starts the user's daemon detached. It runs from the home directory, so it
- * never holds a project folder open
+ * Starts the user's daemon in its own session, so closing or interrupting
+ * this terminal leaves it running for every other client. It runs from the
+ * home directory, so it never holds a project folder open, and writes its
+ * errors to `run/daemon.log`
  */
 function spawnDaemon(): void {
+  const runDir = join(HIBI_HOME, "run");
+  mkdirSync(runDir, { recursive: true });
+
   Bun.spawn(["bun", import.meta.path, "daemon"], {
     cwd: homedir(),
+    detached: true,
+    windowsHide: true,
     stdin: "ignore",
     stdout: "ignore",
-    stderr: "inherit",
+    stderr: Bun.file(join(runDir, "daemon.log")),
   }).unref();
 }
 
 async function chat(repoRoot: string): Promise<void> {
-  const storage = new StorageLocal(HIBI_HOME);
-  const [storedCredentials, storedLearner] = await Promise.all([
-    loadCredentials(),
-    storage.loadLearnerModel(LOCAL_USER),
-  ]);
-
-  let credentials = storedCredentials;
-  let learner = storedLearner;
-
-  if (credentials === null || learner === null) {
-    const setup = await onboard({ credentials, learner });
-    if (setup === null) return;
-    credentials = setup.credentials;
-    learner = setup.learner;
-  }
-
-  const language = learner.preferences.language;
-  const strings = catalogFor(language);
-  const provider = buildProvider(credentials);
   let rendering = false;
+  const early = catalogFor(detectLanguage());
+
   const client = new DaemonClient({
     path: socketPath(HIBI_HOME),
     root: repoRoot,
     start: () => {
-      if (!rendering) stdout.write(`${ui.dim(strings.starting)}\n`);
+      if (!rendering) stdout.write(`${ui.dim(early.starting)}\n`);
       spawnDaemon();
     },
   });
@@ -119,14 +90,27 @@ async function chat(repoRoot: string): Promise<void> {
     return;
   }
 
+  let settings = await readSettings(client);
+  if (settings.profile === null || settings.provider === null) {
+    if (!(await onboard(client, settings))) {
+      client.close();
+      return;
+    }
+    settings = await readSettings(client);
+  }
+
+  const learner = await readProfile(client);
+  const language = learner.preferences.language;
+  const strings = catalogFor(language);
+
   rendering = true;
   const { waitUntilExit } = render(
     <App
       client={client}
-      welcome={welcomeFor(repoRoot, learner, strings, provider)}
+      welcome={welcomeFor(repoRoot, learner, strings, settings)}
       strings={strings}
       help={helpFor(language)}
-      onCommand={(input) => handleCommand(input, client, storage, strings)}
+      onCommand={(input) => handleCommand(input, client, strings)}
     />,
   );
 
@@ -134,27 +118,56 @@ async function chat(repoRoot: string): Promise<void> {
   client.close();
 }
 
+/**
+ * Runs onboarding in the terminal. False when the learner leaves it with
+ * ctrl+c or the input ends: closing the reader aborts the pending question,
+ * which closing alone does not
+ */
 async function onboard(
-  state: OnboardingState,
-): Promise<OnboardingResult | null> {
+  client: DaemonClient,
+  settings: Settings,
+): Promise<boolean> {
   const rl = createInterface({ input: stdin, output: stdout });
+  const abort = new AbortController();
   rl.on("SIGINT", () => rl.close());
+  rl.on("close", () => abort.abort());
 
   try {
-    return await runOnboarding(rl, HIBI_HOME, state);
+    await runOnboarding(
+      (prompt) => rl.question(prompt, { signal: abort.signal }),
+      client,
+      settings,
+    );
+    return true;
   } catch {
     stdout.write("\n");
-    return null;
+    return false;
   } finally {
     rl.close();
   }
+}
+
+async function readSettings(client: DaemonClient): Promise<Settings> {
+  for (const event of await client.call({ type: "settings" })) {
+    if (event.type === "settings") return event.payload;
+  }
+  throw new Error("the daemon sent no settings");
+}
+
+async function readProfile(client: DaemonClient): Promise<LearnerModel> {
+  for (const event of await client.call({ type: "profile" })) {
+    if (event.type === "profile" && event.payload !== null) {
+      return event.payload as LearnerModel;
+    }
+  }
+  throw new Error("the daemon has no profile");
 }
 
 function welcomeFor(
   repoRoot: string,
   learner: LearnerModel,
   strings: Catalog,
-  provider: LLMProvider,
+  settings: Settings,
 ): WelcomeContent {
   const name = learner.preferences.name;
   const goal =
@@ -176,9 +189,9 @@ function welcomeFor(
     lines.push({ text: fill(strings.resuming, { goal }), dim: false });
   lines.push({ text: strings.hint, dim: true });
 
-  if (!provider.capabilities.meetsTutorBaseline) {
+  if (!settings.meetsTutorBaseline && settings.model !== null) {
     lines.push({
-      text: fill(strings.weakModel, { model: provider.model }),
+      text: fill(strings.weakModel, { model: settings.model }),
       dim: true,
     });
   }
@@ -194,7 +207,6 @@ function abbreviateHome(path: string): string {
 async function handleCommand(
   input: string,
   client: DaemonClient,
-  storage: StorageLocal,
   strings: Catalog,
 ): Promise<CommandResult> {
   const raw = input.replace(/\s+--json\b/, "");
@@ -225,17 +237,18 @@ async function handleCommand(
       );
 
     case "/prefs":
-      return handlePrefs(raw, client, storage, strings);
+      return handlePrefs(raw, client, strings);
 
     case "/model":
-      return { output: await describeModel(raw, strings) };
+      return handleModel(argument, client, strings);
 
     case "/provider":
-      return { output: await describeProvider(raw, strings) };
+      return handleProvider(argument, client, strings);
 
-    case "/reset":
-      await clearCredentials();
-      return { output: strings.restartNeeded };
+    case "/reset": {
+      const result = await perform(client, { type: "forget_key" });
+      return result.error === undefined ? { notice: strings.keyRemoved } : result;
+    }
 
     case "/index":
       return perform(client, { type: "reindex" });
@@ -265,10 +278,10 @@ async function perform(
 ): Promise<CommandResult> {
   const result: CommandResult = {};
 
-  await client.request(body, (event) => {
+  for (const event of await client.call(body)) {
     if (event.type === "ok") result.notice = event.message;
     if (event.type === "error") result.error = event.message;
-  });
+  }
   return result;
 }
 
@@ -280,7 +293,7 @@ async function query(
 ): Promise<CommandResult> {
   const result: CommandResult = {};
 
-  await client.request(body, (event) => {
+  for (const event of await client.call(body)) {
     if (
       event.type === "state" ||
       event.type === "profile" ||
@@ -289,23 +302,20 @@ async function query(
       result.output = format(event.payload);
     }
     if (event.type === "error") result.error = event.message;
-  });
+  }
   return result;
 }
 
 async function handlePrefs(
   input: string,
   client: DaemonClient,
-  storage: StorageLocal,
   strings: Catalog,
 ): Promise<CommandResult> {
   const [, key, ...rest] = input.split(/\s+/);
   const value = rest.join(" ").trim();
 
   if (key === undefined || value.length === 0) {
-    const learner = await storage.loadLearnerModel(LOCAL_USER);
-    if (learner === null) return { output: strings.noProfile };
-
+    const learner = await readProfile(client);
     const lines = PREFERENCE_KEYS.map((name) => {
       const current = learner.preferences[name];
       return `${name.padEnd(18)} ${current === "" ? "—" : current}`;
@@ -317,48 +327,58 @@ async function handlePrefs(
   return perform(client, { type: "set_preference", key, value });
 }
 
-async function describeModel(input: string, strings: Catalog): Promise<string> {
-  const [, model] = input.split(/\s+/);
-  const current = await loadCredentials();
-
-  if (model === undefined) {
-    const options =
-      current === null
-        ? []
-        : MODEL_CHOICES[current.provider].map(
-            (choice) => `${choice.label.padEnd(26)} ${choice.note}`,
-          );
-    return [current?.model ?? "—", "", ...options].join("\n");
+/** Lists the active provider's models, or switches to one; the switch applies to the next message */
+async function handleModel(
+  model: string | undefined,
+  client: DaemonClient,
+  strings: Catalog,
+): Promise<CommandResult> {
+  if (model !== undefined) {
+    const result = await perform(client, { type: "set_model", model });
+    return result.error === undefined
+      ? { notice: fill(strings.nowUsing, { model }) }
+      : result;
   }
 
-  const updated = await setActiveModel(model);
-  return updated === null ? strings.noProfile : strings.restartNeeded;
+  const settings = await readSettings(client);
+  const options =
+    settings.provider === null
+      ? []
+      : MODEL_CHOICES[settings.provider].map(
+          (choice) => `${choice.label.padEnd(26)} ${choice.note}`,
+        );
+  return { output: [settings.model ?? "—", "", ...options].join("\n") };
 }
 
-async function describeProvider(
-  input: string,
+/** Shows the providers with a saved key, or switches to one of them */
+async function handleProvider(
+  name: string | undefined,
+  client: DaemonClient,
   strings: Catalog,
-): Promise<string> {
-  const [, name] = input.split(/\s+/);
-
+): Promise<CommandResult> {
   if (name === undefined) {
-    const [current, stored] = await Promise.all([
-      loadCredentials(),
-      storedProviders(),
-    ]);
-    return [
-      current?.provider ?? "—",
-      "",
-      `openai · anthropic`,
-      `(${stored.join(", ")})`,
-    ].join("\n");
+    const settings = await readSettings(client);
+    return {
+      output: [
+        settings.provider ?? "—",
+        "",
+        "openai · anthropic",
+        `(${settings.storedProviders.join(", ")})`,
+      ].join("\n"),
+    };
   }
 
   const parsed = ProviderIdSchema.safeParse(name);
-  if (!parsed.success) return strings.unknownCommand;
+  if (!parsed.success) return { output: strings.unknownCommand };
 
-  const activated = await activateProvider(parsed.data);
-  return activated === null ? strings.noProfile : strings.restartNeeded;
+  const result = await perform(client, {
+    type: "set_provider",
+    provider: parsed.data,
+  });
+  if (result.error !== undefined) return result;
+
+  const settings = await readSettings(client);
+  return { notice: fill(strings.nowUsing, { model: settings.model ?? name }) };
 }
 
 async function handleForget(
@@ -384,8 +404,7 @@ const [command] = process.argv.slice(2);
 if (command === "daemon") await runDaemon();
 else if (command === "chat" || command === undefined) {
   await chat(await findRepoRoot(process.cwd()));
-}
-else {
+} else {
   process.stderr.write("usage: hibi | hibi chat | hibi daemon\n");
   process.exit(1);
 }

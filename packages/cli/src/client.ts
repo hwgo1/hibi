@@ -72,6 +72,13 @@ export class DaemonClient {
     return this.send(body, listener);
   }
 
+  /** Sends one request and resolves with every event it produced, `done` excluded */
+  async call(body: RequestBody): Promise<ServerEvent[]> {
+    const events: ServerEvent[] = [];
+    await this.request(body, (event) => events.push(event));
+    return events;
+  }
+
   close(): void {
     this.socket?.end();
   }

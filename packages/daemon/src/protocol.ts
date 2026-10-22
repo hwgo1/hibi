@@ -1,3 +1,4 @@
+import { ProviderIdSchema, type ProviderId } from "@hibi/core";
 import { z } from "zod";
 
 const RequestId = z.string().min(1).max(64);
@@ -9,7 +10,8 @@ const RequestId = z.string().min(1).max(64);
  * Every request carries an id chosen by the client, and everything the daemon
  * sends back for it carries that id, ending with `done`. A connection first
  * sends `open_space`; message, state, undo, forget, clear and reindex then act
- * on that space. The rest act on the user.
+ * on that space. The rest act on the user, including the settings a client
+ * needs for onboarding: profile, key, provider and model.
  */
 export const ClientRequestSchema = z.discriminatedUnion("type", [
   z.object({
@@ -38,6 +40,31 @@ export const ClientRequestSchema = z.discriminatedUnion("type", [
     scope: z.enum(["concept", "all"]),
     value: z.string().min(1).optional(),
   }),
+  z.object({ id: RequestId, type: z.literal("settings") }),
+  z.object({
+    id: RequestId,
+    type: z.literal("set_profile"),
+    language: z.string().min(1),
+    name: z.string().max(40),
+  }),
+  /** Verified against the provider before it is saved */
+  z.object({
+    id: RequestId,
+    type: z.literal("set_key"),
+    provider: ProviderIdSchema,
+    apiKey: z.string().min(1),
+  }),
+  z.object({
+    id: RequestId,
+    type: z.literal("set_model"),
+    model: z.string().min(1),
+  }),
+  z.object({
+    id: RequestId,
+    type: z.literal("set_provider"),
+    provider: ProviderIdSchema,
+  }),
+  z.object({ id: RequestId, type: z.literal("forget_key") }),
   z.object({ id: RequestId, type: z.literal("clear") }),
   z.object({ id: RequestId, type: z.literal("reindex") }),
   z.object({ id: RequestId, type: z.literal("shutdown") }),
@@ -52,6 +79,17 @@ export type RequestBody = ClientRequest extends infer R
     : never
   : never;
 
+/** What a client needs to know before it can chat: who the learner is and which model answers */
+export interface Settings {
+  /** Null until onboarding saves one */
+  profile: { language: string; name: string } | null;
+  /** Null until a key is saved or given in the environment */
+  provider: ProviderId | null;
+  model: string | null;
+  storedProviders: ProviderId[];
+  meetsTutorBaseline: boolean;
+}
+
 /** What the daemon says about one request, before it is tagged with the request's id */
 export type Reply =
   | { type: "space"; id: string; root: string }
@@ -64,10 +102,13 @@ export type Reply =
       cachedInputTokens: number;
       outputTokens: number;
       model: string;
+      /** Null when the model's price is unknown */
+      usd: number | null;
     }
   | { type: "state"; payload: unknown }
   | { type: "profile"; payload: unknown }
   | { type: "signals"; payload: unknown }
+  | { type: "settings"; payload: Settings }
   | { type: "ok"; message: string }
   | { type: "error"; message: string }
   | { type: "done" };

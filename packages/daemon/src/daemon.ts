@@ -4,24 +4,27 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 import {
+  costOf,
   indexRepo,
   newSessionState,
   StorageLocal,
   systemClock,
-  TeachingPreferencesSchema,
   TutorSession,
   WorkspaceFs,
   type Clock,
   type CommandOutcome,
   type LLMProvider,
   type SessionId,
-  type UserId,
 } from "@hibi/core";
 
+import {
+  Account,
+  isAccountRequest,
+  LOCAL_USER,
+  type AccountRequest,
+} from "./account";
 import type { ClientRequest, Reply, ServerEvent } from "./protocol";
 import { TurnQueue } from "./turn-queue";
-
-const LOCAL_USER = "local" as UserId;
 
 /** One attached connection, as the daemon sees it */
 export interface Client {
@@ -31,10 +34,12 @@ export interface Client {
 /** Everything but `shutdown`, which belongs to the transport that owns the process */
 export type DaemonRequest = Exclude<ClientRequest, { type: "shutdown" }>;
 
-type Answerable = Exclude<DaemonRequest, { type: "message" }>;
+/** Requests answered about a space; the account answers the rest */
+type SpaceRequest = Exclude<DaemonRequest, AccountRequest | { type: "message" }>;
 
 export interface DaemonOptions {
-  provider: LLMProvider;
+  /** Fixed provider, for tests. Without it the daemon uses the saved key */
+  provider?: LLMProvider;
   home?: string;
   clock?: Clock;
 }
@@ -56,20 +61,30 @@ export function repoKey(repoRoot: string): string {
 }
 
 /**
- * Owns the user's state for every space at once. Requests that change state
- * run one at a time, because spaces share the learner, the concepts and the
- * log. Knows nothing about sockets, so it runs under test without one.
+ * Owns the user's state for every space at once, and is the only process
+ * that writes it. Requests that change state run one at a time, because
+ * spaces share the learner, the concepts and the log. Knows nothing about
+ * sockets, so it runs under test without one.
  */
 export class Daemon {
   private readonly storage: StorageLocal;
+  private readonly account: Account;
   private readonly queue = new TurnQueue();
   private readonly clock: Clock;
   private readonly spaces = new Map<string, Promise<Space>>();
   private readonly attached = new Map<Client, Space>();
 
-  constructor(private readonly options: DaemonOptions) {
+  constructor(options: DaemonOptions = {}) {
+    const home = options.home ?? join(homedir(), ".hibi");
     this.clock = options.clock ?? systemClock;
-    this.storage = new StorageLocal(options.home ?? join(homedir(), ".hibi"));
+    this.storage = new StorageLocal(home);
+    this.account = new Account({
+      storage: this.storage,
+      home,
+      clock: this.clock,
+      queue: this.queue,
+      provider: options.provider,
+    });
   }
 
   /**
@@ -78,6 +93,8 @@ export class Daemon {
    * only
    */
   async handle(request: DaemonRequest, client: Client): Promise<void> {
+    await this.account.ready;
+
     if (request.type === "message") {
       const space = this.attached.get(client);
       if (space === undefined) {
@@ -90,7 +107,9 @@ export class Daemon {
 
     let replies: Reply[];
     try {
-      replies = await this.dispatch(request, client);
+      replies = isAccountRequest(request)
+        ? await this.account.answer(request)
+        : await this.dispatch(request, client);
     } catch (error) {
       replies = [{ type: "error", message: messageOf(error) }];
     }
@@ -103,28 +122,9 @@ export class Daemon {
     this.attached.delete(client);
   }
 
-  private async dispatch(request: Answerable, client: Client): Promise<Reply[]> {
-    switch (request.type) {
-      case "open_space":
-        return this.openSpace(request.root, client);
-
-      case "profile":
-        return [
-          {
-            type: "profile",
-            payload: await this.storage.loadLearnerModel(LOCAL_USER),
-          },
-        ];
-
-      case "signals": {
-        const learner = await this.storage.loadLearnerModel(LOCAL_USER);
-        return [{ type: "signals", payload: learner?.inferredSignals ?? [] }];
-      }
-
-      case "set_preference":
-        return this.queue.run(() =>
-          this.setPreference(request.key, request.value),
-        );
+  private async dispatch(request: SpaceRequest, client: Client): Promise<Reply[]> {
+    if (request.type === "open_space") {
+      return this.openSpace(request.root, client);
     }
 
     const space = this.attached.get(client);
@@ -190,7 +190,7 @@ export class Daemon {
 
     const tutor = new TutorSession(
       {
-        provider: this.options.provider,
+        provider: this.account.provider,
         storage: this.storage,
         workspace: new WorkspaceFs(root),
         clock: this.clock,
@@ -215,33 +215,6 @@ export class Daemon {
     } catch {
       // leaves the repo model null; the prompt omits the <repo> block
     }
-  }
-
-  /**
-   * Validates a single preference against the schema before writing, so an
-   * unknown key or an invalid value is rejected
-   */
-  private async setPreference(key: string, value: string): Promise<Reply[]> {
-    const learner = await this.storage.loadLearnerModel(LOCAL_USER);
-    if (learner === null) return [{ type: "error", message: "no profile yet" }];
-
-    if (!Object.keys(learner.preferences).includes(key)) {
-      return [{ type: "error", message: `unknown preference: ${key}` }];
-    }
-
-    const parsed = TeachingPreferencesSchema.safeParse({
-      ...learner.preferences,
-      [key]: value,
-    });
-    if (!parsed.success) {
-      return [{ type: "error", message: `invalid value for ${key}: ${value}` }];
-    }
-
-    learner.preferences = parsed.data;
-    learner.updatedAt = this.clock.now().toISOString();
-    await this.storage.saveLearnerModel(learner);
-
-    return [{ type: "ok", message: `${key} = ${value}` }];
   }
 
   /** Runs a state-changing command in turn order, so it never interleaves with a turn */
@@ -293,6 +266,7 @@ export class Daemon {
             cachedInputTokens: event.usage.cachedInputTokens ?? 0,
             outputTokens: event.usage.outputTokens,
             model: event.model,
+            usd: costOf(event.usage, event.model),
           });
         } else {
           send({ type: "error", message: event.message });
