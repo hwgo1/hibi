@@ -7,7 +7,7 @@ import { FakeProvider } from "../src/adapters/fake-provider";
 import { StorageLocal } from "../src/adapters/storage-local";
 import { seedRegistry, type ConceptId } from "../src/concepts";
 import type { SessionId, UserId } from "../src/ids";
-import type { CompletionEvent } from "../src/ports/llm";
+import { joinSystem, type CompletionEvent } from "../src/ports/llm";
 import type { Workspace } from "../src/ports/workspace";
 import { buildEvidence } from "../src/schemas/evidence";
 import type { SessionState } from "../src/schemas/session";
@@ -99,7 +99,7 @@ describe("turn", () => {
     await withTutor([finish], async ({ tutor, provider }) => {
       await drain(tutor.turn("oi"));
 
-      const system = provider.requests[0]!.system;
+      const system = joinSystem(provider.requests[0]!.system);
       expect(system).toContain("<learner>");
       expect(system).toContain("<concepts>");
       expect(system).toContain("<session>");
@@ -559,7 +559,7 @@ describe("session lifecycle", () => {
       );
       await drain(after.turn("b"));
 
-      const system = provider.requests[0]!.system;
+      const system = joinSystem(provider.requests[0]!.system);
       expect(system).toContain("Quando um canal com buffer bloqueia no envio?");
       expect(system).toContain("b) Com o buffer cheio");
       expect(system).not.toContain("Só bloqueia quando o buffer enche.");

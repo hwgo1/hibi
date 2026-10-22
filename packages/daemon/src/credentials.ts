@@ -1,7 +1,12 @@
 import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { ProviderIdSchema, type Credentials, type ProviderId } from "@hibi/core";
+import {
+  MODEL_CHOICES,
+  ProviderIdSchema,
+  type Credentials,
+  type ProviderId,
+} from "@hibi/core";
 import { z } from "zod";
 
 const EntrySchema = z.object({
@@ -115,22 +120,19 @@ export class CredentialStore {
   }
 }
 
+/** OPENAI_API_KEY first, then ANTHROPIC_API_KEY; the model defaults to the provider's recommended one */
 function credentialsFromEnv(): Credentials | null {
-  const model = process.env["HIBI_MODEL"];
+  const keys: Record<ProviderId, string | undefined> = {
+    openai: process.env["OPENAI_API_KEY"],
+    anthropic: process.env["ANTHROPIC_API_KEY"],
+  };
 
-  const openai = process.env["OPENAI_API_KEY"];
-  if (openai !== undefined) {
-    return { provider: "openai", apiKey: openai, model: model ?? "gpt-4.1" };
+  for (const provider of ProviderIdSchema.options) {
+    const apiKey = keys[provider];
+    if (apiKey !== undefined) {
+      const model = process.env["HIBI_MODEL"] ?? MODEL_CHOICES[provider][0]!.id;
+      return { provider, apiKey, model };
+    }
   }
-
-  const anthropic = process.env["ANTHROPIC_API_KEY"];
-  if (anthropic !== undefined) {
-    return {
-      provider: "anthropic",
-      apiKey: anthropic,
-      model: model ?? "claude-sonnet-4-6",
-    };
-  }
-
   return null;
 }

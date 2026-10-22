@@ -2,13 +2,11 @@ import type {
   CompletionEvent,
   CompletionRequest,
   LLMProvider,
-  ProviderCapabilities,
 } from "@hibi/core";
 
 const UNCONFIGURED: LLMProvider = {
   id: "none",
   model: "none",
-  capabilities: { supportsTools: true, meetsTutorBaseline: false },
   async *complete(): AsyncIterable<CompletionEvent> {
     yield {
       type: "error",
@@ -30,20 +28,12 @@ export class ActiveProvider implements LLMProvider {
     this.current = initial ?? UNCONFIGURED;
   }
 
-  get configured(): boolean {
-    return this.current !== UNCONFIGURED;
-  }
-
   get id(): string {
     return this.current.id;
   }
 
   get model(): string {
     return this.current.model;
-  }
-
-  get capabilities(): ProviderCapabilities {
-    return this.current.capabilities;
   }
 
   use(provider: LLMProvider | null): void {

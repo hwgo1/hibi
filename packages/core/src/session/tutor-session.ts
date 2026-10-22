@@ -5,6 +5,7 @@ import type { SessionId, UserId } from "../ids";
 import type {
   LLMProvider,
   ProviderMessage,
+  SystemPrompt,
   TokenUsage,
   ToolCall,
   ToolResult,
@@ -30,7 +31,8 @@ import { isIdle, renewSession } from "./lifecycle";
 import { buildSystemPrompt } from "./prompt";
 
 const MAX_TOOL_ROUNDS = 5;
-const MAX_TOKENS = 4096;
+/** Leaves room for reasoning, which counts toward the limit on models that reason before answering */
+const MAX_TOKENS = 16_000;
 const MAX_RETRIES = 2;
 const RETRY_BASE_MS = 500;
 
@@ -43,6 +45,7 @@ const UNDO_DEPTH = 20;
 export type TurnEvent =
   | { type: "text"; text: string }
   | { type: "tool"; name: string; args: unknown }
+  /** One per completion, since providers price each request on its own */
   | { type: "usage"; usage: TokenUsage; model: string }
   | { type: "error"; message: string };
 
@@ -62,6 +65,7 @@ interface CompletionOutcome {
   text: string;
   toolCalls: ToolCall[];
   stopReason: "end_turn" | "tool_use" | "max_tokens";
+  replay: unknown;
   error: string | null;
   usage: TokenUsage | null;
 }
@@ -145,16 +149,16 @@ export class TutorSession {
       { role: "user", content: userMessage },
     ];
 
-    let usage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
     let reply = "";
 
     for (let round = 0; ; round++) {
       const last = round === MAX_TOOL_ROUNDS;
       const result = yield* this.complete(system, messages, last);
-      usage = addUsage(usage, result.usage);
+      if (result.usage !== null) {
+        yield { type: "usage", usage: result.usage, model: provider.model };
+      }
 
       if (result.error !== null) {
-        yield { type: "usage", usage, model: provider.model };
         yield { type: "error", message: result.error };
         return;
       }
@@ -166,6 +170,7 @@ export class TutorSession {
         role: "assistant",
         content: result.text,
         toolCalls: result.toolCalls,
+        replay: result.replay,
       });
 
       const results: ToolResult[] = [];
@@ -186,8 +191,6 @@ export class TutorSession {
 
       if (result.stopReason !== "tool_use") break;
     }
-
-    yield { type: "usage", usage, model: provider.model };
 
     const evidence = await this.commit(context, now);
     this.remember({
@@ -299,7 +302,7 @@ export class TutorSession {
   }
 
   private async *complete(
-    system: string,
+    system: SystemPrompt,
     messages: ProviderMessage[],
     last: boolean,
   ): AsyncGenerator<TurnEvent, CompletionOutcome> {
@@ -309,6 +312,7 @@ export class TutorSession {
       let text = "";
       const toolCalls: ToolCall[] = [];
       let stopReason: CompletionOutcome["stopReason"] = "end_turn";
+      let replay: unknown;
       let error: string | null = null;
       let retryable = false;
       let usage: TokenUsage | null = null;
@@ -329,6 +333,7 @@ export class TutorSession {
           usage = event.usage;
         } else if (event.type === "done") {
           stopReason = event.stopReason;
+          replay = event.replay;
         } else {
           error = event.message;
           retryable = event.retryable;
@@ -352,6 +357,7 @@ export class TutorSession {
         text,
         toolCalls: last ? [] : toolCalls,
         stopReason,
+        replay,
         error,
         usage,
       };
@@ -418,16 +424,6 @@ export class TutorSession {
     const existing = await this.deps.storage.loadConceptRegistry(userId);
     return existing ?? seedRegistry(now);
   }
-}
-
-function addUsage(total: TokenUsage, next: TokenUsage | null): TokenUsage {
-  if (next === null) return total;
-  return {
-    inputTokens: total.inputTokens + next.inputTokens,
-    cachedInputTokens:
-      (total.cachedInputTokens ?? 0) + (next.cachedInputTokens ?? 0),
-    outputTokens: total.outputTokens + next.outputTokens,
-  };
 }
 
 function registryChanges(

@@ -2,6 +2,7 @@ import {
   createProvider,
   isKnownLanguage,
   loadLearner,
+  meetsTutorBaseline,
   MODEL_CHOICES,
   TeachingPreferencesSchema,
   verifyCredentials,
@@ -141,9 +142,7 @@ export class Account {
       provider: active?.provider ?? null,
       model: active?.model ?? null,
       storedProviders,
-      meetsTutorBaseline:
-        this.provider.configured &&
-        this.provider.capabilities.meetsTutorBaseline,
+      meetsTutorBaseline: active !== null && meetsTutorBaseline(active.model),
     };
   }
 

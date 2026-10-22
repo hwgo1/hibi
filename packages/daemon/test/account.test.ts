@@ -180,11 +180,11 @@ describe("CredentialStore", () => {
 });
 
 describe("ActiveProvider", () => {
-  test("unconfigured, it answers with an error that names the fix", async () => {
+  test("without a key, it answers with an error that names the fix", async () => {
     const provider = new ActiveProvider(null);
     const events = [];
     for await (const event of provider.complete({
-      system: "",
+      system: { stable: "", volatile: "" },
       messages: [],
       tools: [],
       maxTokens: 1,
@@ -192,7 +192,6 @@ describe("ActiveProvider", () => {
       events.push(event);
     }
 
-    expect(provider.configured).toBe(false);
     expect(events[0]).toMatchObject({ type: "error", retryable: false });
   });
 });

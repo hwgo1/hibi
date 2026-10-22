@@ -2,16 +2,11 @@ import type {
   CompletionEvent,
   CompletionRequest,
   LLMProvider,
-  ProviderCapabilities,
 } from "../ports/llm";
 
 export class FakeProvider implements LLMProvider {
   readonly id = "fake";
   readonly model = "fake-model";
-  readonly capabilities: ProviderCapabilities = {
-    supportsTools: true,
-    meetsTutorBaseline: true,
-  };
 
   readonly requests: CompletionRequest[] = [];
   private index = 0;

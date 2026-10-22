@@ -1,4 +1,5 @@
 import type { Concept, ConceptRegistry } from "../concepts";
+import type { SystemPrompt } from "../ports/llm";
 import type { Workspace } from "../ports/workspace";
 import type { LearnerModel, MasteryEntry } from "../schemas/learner";
 import type { RepoModel } from "../schemas/repo";
@@ -32,21 +33,30 @@ export interface PromptInput {
  * tutor needs lives in the transcript, so the transcript can be truncated
  * freely without losing the exercise, the ladder position or the history.
  *
- * Sections are ordered from most to least stable across turns. Providers bill
- * a cached prefix at a fraction of the input rate, and the cache holds only up
- * to the first byte that differs, so a volatile section placed early would
- * invalidate everything after it. The session goes last for that reason, and
- * carries no turn counter, which would change the prefix on every call.
+ * Providers bill a cached prefix at a fraction of the input rate, and the
+ * cache holds only up to the first byte that differs. The stable part holds
+ * what changes at most when evidence is recorded: rules, repository, concepts
+ * and learner. The volatile part holds pinned files and the session, which
+ * change on most turns. The session carries no turn counter, which would
+ * change on every call.
  */
-export async function buildSystemPrompt(input: PromptInput): Promise<string> {
-  const sections = [
+export async function buildSystemPrompt(
+  input: PromptInput,
+): Promise<SystemPrompt> {
+  const stable = [
     TUTOR_RULES,
     renderRepo(input.repo),
     renderConcepts(input.registry, input.learner),
     renderLearner(input.learner),
+  ];
+  const volatile = [
     await renderContextFiles(input.session, input.workspace),
     renderSession(input.session, input.now),
   ];
+  return { stable: joinSections(stable), volatile: joinSections(volatile) };
+}
+
+function joinSections(sections: string[]): string {
   return sections.filter((section) => section.length > 0).join("\n\n");
 }
 

@@ -4,12 +4,11 @@ import type {
   CompletionEvent,
   CompletionRequest,
   LLMProvider,
-  ProviderCapabilities,
   ProviderMessage,
   TokenUsage,
 } from "../ports/llm";
 
-const TUTOR_BASELINE_PREFIXES = ["claude-opus", "claude-sonnet"];
+const EPHEMERAL = { type: "ephemeral" } as const;
 
 export interface AnthropicProviderOptions {
   apiKey: string;
@@ -20,7 +19,6 @@ export interface AnthropicProviderOptions {
 export class AnthropicProvider implements LLMProvider {
   readonly id = "anthropic";
   readonly model: string;
-  readonly capabilities: ProviderCapabilities;
 
   private readonly client: Anthropic;
 
@@ -30,72 +28,26 @@ export class AnthropicProvider implements LLMProvider {
       apiKey: options.apiKey,
       baseURL: options.baseURL,
     });
-    this.capabilities = {
-      supportsTools: true,
-      meetsTutorBaseline: TUTOR_BASELINE_PREFIXES.some((prefix) =>
-        options.model.startsWith(prefix),
-      ),
-    };
   }
 
   /**
-   * Tool calls and their results are content blocks inside a message here,
-   * rather than separate fields and separate messages.
+   * Streams text as it arrives, then reads tool calls, usage and the stop
+   * reason from the accumulated message.
+   *
+   * Caching: an explicit breakpoint ends the stable system prompt, so every
+   * turn reuses tools, rules and profile; the top-level marker moves with the
+   * conversation, so each tool round reuses the rounds before it.
    */
-  private toApiMessages(messages: ProviderMessage[]): Anthropic.MessageParam[] {
-    const out: Anthropic.MessageParam[] = [];
-
-    for (const message of messages) {
-      if (message.role === "user") {
-        out.push({ role: "user", content: message.content });
-        continue;
-      }
-
-      if (message.role === "assistant") {
-        const blocks: Anthropic.ContentBlockParam[] = [];
-        if (message.content.length > 0) {
-          blocks.push({ type: "text", text: message.content });
-        }
-        for (const call of message.toolCalls ?? []) {
-          blocks.push({
-            type: "tool_use",
-            id: call.id,
-            name: call.name,
-            input: call.arguments as Record<string, unknown>,
-          });
-        }
-        out.push({ role: "assistant", content: blocks });
-        continue;
-      }
-
-      out.push({
-        role: "user",
-        content: message.results.map((result) => ({
-          type: "tool_result" as const,
-          tool_use_id: result.toolCallId,
-          content: result.content,
-          is_error: result.isError,
-        })),
-      });
-    }
-
-    return out;
-  }
-
   async *complete(request: CompletionRequest): AsyncIterable<CompletionEvent> {
-    const pending = new Map<
-      number,
-      { id: string; name: string; json: string }
-    >();
-    let stopReason: string | null = null;
-    let usage: TokenUsage | null = null;
+    let message: Anthropic.Message;
 
     try {
       const stream = this.client.messages.stream({
         model: this.model,
         max_tokens: request.maxTokens,
-        system: request.system,
-        messages: this.toApiMessages(request.messages),
+        cache_control: EPHEMERAL,
+        system: systemBlocks(request),
+        messages: toApiMessages(request.messages),
         tools: request.tools.map((tool) => ({
           name: tool.name,
           description: tool.description,
@@ -106,86 +58,138 @@ export class AnthropicProvider implements LLMProvider {
       });
 
       for await (const event of stream) {
-        if (event.type === "message_start") {
-          usage = {
-            inputTokens: event.message.usage.input_tokens,
-            cachedInputTokens:
-              event.message.usage.cache_read_input_tokens ?? undefined,
-            outputTokens: 0,
-          };
-          continue;
-        }
-
         if (
-          event.type === "content_block_start" &&
-          event.content_block.type === "tool_use"
+          event.type === "content_block_delta" &&
+          event.delta.type === "text_delta"
         ) {
-          pending.set(event.index, {
-            id: event.content_block.id,
-            name: event.content_block.name,
-            json: "",
-          });
-          continue;
-        }
-
-        if (event.type === "content_block_delta") {
-          if (event.delta.type === "text_delta") {
-            yield { type: "text_delta", text: event.delta.text };
-            continue;
-          }
-          if (event.delta.type === "input_json_delta") {
-            const slot = pending.get(event.index);
-            if (slot !== undefined) slot.json += event.delta.partial_json;
-          }
-          continue;
-        }
-
-        if (event.type === "message_delta") {
-          if (usage !== null) {
-            usage = { ...usage, outputTokens: event.usage.output_tokens };
-          }
-          if (event.delta.stop_reason !== null) {
-            stopReason = event.delta.stop_reason;
-          }
+          yield { type: "text_delta", text: event.delta.text };
         }
       }
+      message = await stream.finalMessage();
     } catch (error) {
       yield classifyAnthropicError(error);
       return;
     }
 
-    for (const slot of pending.values()) {
-      let parsed: unknown;
-      try {
-        parsed = slot.json.length > 0 ? JSON.parse(slot.json) : {};
-      } catch {
+    for (const block of message.content) {
+      if (block.type === "tool_use") {
         yield {
-          type: "error",
-          message: `malformed tool arguments for ${slot.name}`,
-          retryable: true,
+          type: "tool_call",
+          call: { id: block.id, name: block.name, arguments: block.input },
         };
-        return;
       }
-      yield {
-        type: "tool_call",
-        call: { id: slot.id, name: slot.name, arguments: parsed },
-      };
     }
 
-    if (usage !== null) {
-      yield { type: "usage", usage };
-    }
-
+    yield { type: "usage", usage: usageOf(message.usage) };
     yield {
       type: "done",
       stopReason:
-        stopReason === "tool_use"
+        message.stop_reason === "tool_use"
           ? "tool_use"
-          : stopReason === "max_tokens"
+          : message.stop_reason === "max_tokens"
             ? "max_tokens"
             : "end_turn",
+      replay: message.content.flatMap(toReplayBlock),
     };
   }
+}
+
+function systemBlocks(request: CompletionRequest): Anthropic.TextBlockParam[] {
+  const blocks: Anthropic.TextBlockParam[] = [
+    { type: "text", text: request.system.stable, cache_control: EPHEMERAL },
+  ];
+  if (request.system.volatile.length > 0) {
+    blocks.push({ type: "text", text: request.system.volatile });
+  }
+  return blocks;
+}
+
+/**
+ * Tool calls and their results are content blocks inside a message here,
+ * rather than separate fields and separate messages. An assistant message
+ * that carries a replay is sent back exactly as the model produced it, which
+ * keeps its reasoning blocks intact across the tool round
+ */
+function toApiMessages(messages: ProviderMessage[]): Anthropic.MessageParam[] {
+  const out: Anthropic.MessageParam[] = [];
+
+  for (const message of messages) {
+    if (message.role === "user") {
+      out.push({ role: "user", content: message.content });
+      continue;
+    }
+
+    if (message.role === "assistant") {
+      if (Array.isArray(message.replay)) {
+        out.push({
+          role: "assistant",
+          content: message.replay as Anthropic.ContentBlockParam[],
+        });
+        continue;
+      }
+
+      const blocks: Anthropic.ContentBlockParam[] = [];
+      if (message.content.length > 0) {
+        blocks.push({ type: "text", text: message.content });
+      }
+      for (const call of message.toolCalls ?? []) {
+        blocks.push({
+          type: "tool_use",
+          id: call.id,
+          name: call.name,
+          input: call.arguments as Record<string, unknown>,
+        });
+      }
+      out.push({ role: "assistant", content: blocks });
+      continue;
+    }
+
+    out.push({
+      role: "user",
+      content: message.results.map((result) => ({
+        type: "tool_result" as const,
+        tool_use_id: result.toolCallId,
+        content: result.content,
+        is_error: result.isError,
+      })),
+    });
+  }
+
+  return out;
+}
+
+/** The request form of a response block, keeping only the fields the API takes back */
+function toReplayBlock(
+  block: Anthropic.ContentBlock,
+): Anthropic.ContentBlockParam[] {
+  switch (block.type) {
+    case "thinking":
+      return [
+        { type: "thinking", thinking: block.thinking, signature: block.signature },
+      ];
+    case "redacted_thinking":
+      return [{ type: "redacted_thinking", data: block.data }];
+    case "text":
+      return block.text.length > 0 ? [{ type: "text", text: block.text }] : [];
+    case "tool_use":
+      return [
+        { type: "tool_use", id: block.id, name: block.name, input: block.input },
+      ];
+    default:
+      return [];
+  }
+}
+
+/** `input_tokens` counts only what was neither read from nor written to the cache */
+function usageOf(usage: Anthropic.Usage): TokenUsage {
+  const read = usage.cache_read_input_tokens ?? 0;
+  const written = usage.cache_creation_input_tokens ?? 0;
+  return {
+    inputTokens: usage.input_tokens + read + written,
+    cachedInputTokens: read,
+    cacheWriteTokens: written,
+    outputTokens: usage.output_tokens,
+  };
 }
 
 function classifyAnthropicError(error: unknown): CompletionEvent {

@@ -4,17 +4,10 @@ import type {
   CompletionEvent,
   CompletionRequest,
   LLMProvider,
-  ProviderCapabilities,
   ProviderMessage,
   TokenUsage,
 } from "../ports/llm";
-
-/**
- * Models that reliably respect instruction-level constraints such as hint
- * depth. Smaller variants tend to answer with the full solution regardless of
- * the depth instruction, so they are flagged
- */
-const TUTOR_BASELINE_MODELS = new Set(["gpt-4.1", "gpt-4o", "o3", "o4-mini"]);
+import { joinSystem } from "../ports/llm";
 
 export interface OpenAIProviderOptions {
   apiKey: string;
@@ -25,7 +18,6 @@ export interface OpenAIProviderOptions {
 export class OpenAIProvider implements LLMProvider {
   readonly id = "openai";
   readonly model: string;
-  readonly capabilities: ProviderCapabilities;
 
   private readonly client: OpenAI;
 
@@ -35,10 +27,6 @@ export class OpenAIProvider implements LLMProvider {
       apiKey: options.apiKey,
       baseURL: options.baseURL,
     });
-    this.capabilities = {
-      supportsTools: true,
-      meetsTutorBaseline: TUTOR_BASELINE_MODELS.has(options.model),
-    };
   }
 
   /** Translates the core message shape into the chat-completions format */
@@ -101,7 +89,7 @@ export class OpenAIProvider implements LLMProvider {
         stream: true,
         stream_options: { include_usage: true },
         messages: [
-          { role: "system", content: request.system },
+          { role: "system", content: joinSystem(request.system) },
           ...this.toApiMessages(request.messages),
         ],
         tools: request.tools.map((tool) => ({
@@ -125,6 +113,7 @@ export class OpenAIProvider implements LLMProvider {
     try {
       for await (const chunk of stream) {
         if (chunk.usage != null) {
+          // prompt_tokens already counts the cached part, and caching here bills no write
           usage = {
             inputTokens: chunk.usage.prompt_tokens,
             cachedInputTokens: chunk.usage.prompt_tokens_details?.cached_tokens,

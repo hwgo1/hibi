@@ -8,6 +8,7 @@ import {
   type LearnerModel,
 } from "../src/schemas/learner";
 import type { SessionState } from "../src/schemas/session";
+import { joinSystem } from "../src/ports/llm";
 import { buildSystemPrompt } from "../src/session/prompt";
 import { newSessionState } from "../src/session/tutor-session";
 import { testItem } from "./fixtures";
@@ -52,14 +53,14 @@ function session(): SessionState {
 }
 
 async function build(state: SessionState): Promise<string> {
-  return buildSystemPrompt({
+  return joinSystem(await buildSystemPrompt({
     learner: learner(),
     session: state,
     registry: seedRegistry(NOW),
     repo: null,
     workspace,
     now: NOW,
-  });
+  }));
 }
 
 describe("system prompt", () => {
@@ -130,7 +131,7 @@ describe("session section", () => {
 
 describe("learner and repo sections", () => {
   test("names the reply language and the programming language apart", async () => {
-    const prompt = await buildSystemPrompt({
+    const prompt = joinSystem(await buildSystemPrompt({
       learner: {
         ...learner(),
         goal: {
@@ -149,7 +150,7 @@ describe("learner and repo sections", () => {
       repo: null,
       workspace,
       now: NOW,
-    });
+    }));
 
     expect(prompt).toContain("reply language: pt-BR");
     expect(prompt).toContain("programming language: Go");
@@ -158,7 +159,7 @@ describe("learner and repo sections", () => {
 
   test("lists the files the user wrote, up to a cap", async () => {
     const files = Array.from({ length: 18 }, (_, index) => `src/f${index}.go`);
-    const prompt = await buildSystemPrompt({
+    const prompt = joinSystem(await buildSystemPrompt({
       learner: learner(),
       session: session(),
       registry: seedRegistry(NOW),
@@ -190,7 +191,7 @@ describe("learner and repo sections", () => {
       },
       workspace,
       now: NOW,
-    });
+    }));
 
     expect(prompt).toContain("written by the user: src/f0.go");
     expect(prompt).toContain("src/f14.go (+3 more)");
